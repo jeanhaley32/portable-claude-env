@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-)
 
-const docsDir = "_docs"
+	"github.com/jeanhaley32/portable-claude-env/internal/constants"
+)
 
 // Manager implements SymlinkManager.
 type Manager struct{}
@@ -17,31 +17,45 @@ func NewManager() *Manager {
 }
 
 func (m *Manager) CreateSymlink(workspacePath, volumeMountPoint, repoID string) error {
-	symlinkPath := filepath.Join(workspacePath, docsDir)
+	// Validate inputs
+	if workspacePath == "" || volumeMountPoint == "" || repoID == "" {
+		return fmt.Errorf("all parameters are required: workspace=%q, mount=%q, repo=%q",
+			workspacePath, volumeMountPoint, repoID)
+	}
+
+	symlinkPath := filepath.Join(workspacePath, constants.DocsSymlinkName)
 	targetPath := filepath.Join(volumeMountPoint, "repos", repoID)
 
 	// Ensure target directory exists
-	if err := os.MkdirAll(targetPath, 0755); err != nil {
+	if err := os.MkdirAll(targetPath, constants.DirPermissions); err != nil {
 		return fmt.Errorf("failed to create target directory: %w", err)
 	}
 
-	// Remove existing symlink if present
-	if m.SymlinkExists(workspacePath) {
-		if err := m.RemoveSymlink(workspacePath); err != nil {
-			return fmt.Errorf("failed to remove existing symlink: %w", err)
-		}
+	// Use atomic symlink replacement to avoid race conditions:
+	// 1. Create symlink with temporary name
+	// 2. Rename to final name (atomic on Unix)
+	tempPath := symlinkPath + ".tmp"
+
+	// Remove any stale temp symlink
+	_ = os.Remove(tempPath)
+
+	// Create temp symlink
+	if err := os.Symlink(targetPath, tempPath); err != nil {
+		return fmt.Errorf("failed to create symlink: %w", err)
 	}
 
-	// Create symlink
-	if err := os.Symlink(targetPath, symlinkPath); err != nil {
-		return fmt.Errorf("failed to create symlink: %w", err)
+	// Atomic rename to final path
+	if err := os.Rename(tempPath, symlinkPath); err != nil {
+		// Clean up temp symlink on failure
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("failed to rename symlink: %w", err)
 	}
 
 	return nil
 }
 
 func (m *Manager) RemoveSymlink(workspacePath string) error {
-	symlinkPath := filepath.Join(workspacePath, docsDir)
+	symlinkPath := filepath.Join(workspacePath, constants.DocsSymlinkName)
 
 	// Only remove if it's a symlink, not a real directory
 	info, err := os.Lstat(symlinkPath)
@@ -60,7 +74,7 @@ func (m *Manager) RemoveSymlink(workspacePath string) error {
 }
 
 func (m *Manager) SymlinkExists(workspacePath string) bool {
-	symlinkPath := filepath.Join(workspacePath, docsDir)
+	symlinkPath := filepath.Join(workspacePath, constants.DocsSymlinkName)
 	info, err := os.Lstat(symlinkPath)
 	if err != nil {
 		return false
@@ -69,7 +83,7 @@ func (m *Manager) SymlinkExists(workspacePath string) bool {
 }
 
 func (m *Manager) CleanupBroken(workspacePath string) error {
-	symlinkPath := filepath.Join(workspacePath, docsDir)
+	symlinkPath := filepath.Join(workspacePath, constants.DocsSymlinkName)
 
 	// Check if symlink exists
 	info, err := os.Lstat(symlinkPath)

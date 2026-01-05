@@ -4,12 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-)
 
-const (
-	linuxVolumeFile = "claude-env.img"
-	linuxMountPoint = "/tmp/claude-env-mount"
-	linuxMapperName = "claude-env"
+	"github.com/jeanhaley32/portable-claude-env/internal/constants"
 )
 
 // LinuxVolumeManager implements VolumeManager using cryptsetup/LUKS for Linux.
@@ -51,5 +47,20 @@ func (l *LinuxVolumeManager) Exists(volumePath string) bool {
 }
 
 func (l *LinuxVolumeManager) GetVolumePath(baseDir string) string {
-	return filepath.Join(baseDir, linuxVolumeFile)
+	return filepath.Join(baseDir, constants.LinuxVolumeFile)
+}
+
+// IsMounted returns true if the volume is currently mounted.
+func (l *LinuxVolumeManager) IsMounted() bool {
+	// TODO: Check if /dev/mapper/claude-env exists and is mounted
+	_, err := os.Stat(constants.LinuxMountPoint)
+	return err == nil
+}
+
+// GetMountPoint returns the current mount point if mounted, empty string otherwise.
+func (l *LinuxVolumeManager) GetMountPoint() string {
+	if l.IsMounted() {
+		return constants.LinuxMountPoint
+	}
+	return ""
 }

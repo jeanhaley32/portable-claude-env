@@ -30,4 +30,5 @@ var VolumeStructure = []string{
 	"claude-context", // .claude conversation history
 	"bootstrap",      // Templates and starting files
 	"repos",          // Per-repository documentation and context
+	"home",           // User home directory (persists Claude credentials, shell history, etc.)
 }

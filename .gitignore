@@ -1,6 +1,7 @@
 # Encrypted volumes
-claude-env.dmg
-claude-env.img
+*.sparseimage
+*.dmg
+*.img
 
 # Shadow documentation (NEVER commit)
 _docs/
