@@ -23,26 +23,25 @@ This project solves these by:
 
 ## Quick Start
 
-### 1. Build the CLI
+### 1. Install
 
 ```bash
 git clone https://github.com/jeanhaley32/portable-claude-env.git
 cd portable-claude-env
 go build -o claude-env ./cmd/claude-env
+
+# Optional: Install to PATH for system-wide access
+sudo mv claude-env /usr/local/bin/
 ```
 
-### 2. Build the Docker Image
+The Docker image is embedded in the binary and will be built automatically on first use.
 
-```bash
-docker build -t portable-claude:latest .
-```
-
-### 3. Bootstrap (First Time Only)
+### 2. Bootstrap (First Time Only)
 
 Create your encrypted volume:
 
 ```bash
-./claude-env bootstrap --size 2
+claude-env bootstrap --size 2
 ```
 
 You'll be prompted to create a password. This creates a 2GB encrypted sparse image.
@@ -52,7 +51,7 @@ You'll be prompted to create a password. This creates a 2GB encrypted sparse ima
 - `--path PATH` - Where to store the volume (default: current directory)
 - `--api-key KEY` - Optionally store your API key during setup
 
-### 4. Start the Environment
+### 3. Start the Environment
 
 Navigate to any project and start:
 
@@ -68,7 +67,7 @@ This will:
 4. Create `_docs/` symlink for shadow documentation
 5. Drop you into a bash shell inside the container
 
-### 5. Use Claude Code
+### 4. Use Claude Code
 
 Inside the container, authenticate with Claude:
 
@@ -78,15 +77,13 @@ claude   # Start Claude Code CLI
 
 Your credentials are stored in the encrypted volume and persist across sessions.
 
-### 6. Stop the Environment
+### 5. Exit
 
-Exit the container shell, then:
+Simply type `exit` to leave the container. The environment automatically:
+- Stops the container
+- Unmounts the encrypted volume (locking your credentials)
 
-```bash
-./claude-env stop
-```
-
-This stops the container and unmounts the encrypted volume (locking your credentials).
+You can also manually stop with `claude-env stop` if needed.
 
 ## Commands
 
@@ -94,8 +91,9 @@ This stops the container and unmounts the encrypted volume (locking your credent
 |---------|-------------|
 | `bootstrap` | Create new encrypted volume |
 | `start` | Mount volume, start container, enter shell |
-| `stop` | Stop container, unmount volume |
+| `stop` | Stop container, unmount volume (manual) |
 | `status` | Show current environment status |
+| `build-image` | Build Docker image (automatic on first start) |
 | `version` | Show version information |
 
 ## How It Works
@@ -104,7 +102,7 @@ This stops the container and unmounts the encrypted volume (locking your credent
 
 ```
 claude-env.sparseimage (encrypted, AES-256)
-└── /Volumes/ClaudeEnv (when mounted)
+└── ~/.claude-env/mount (when mounted)
     ├── auth/           # API keys
     ├── config/         # Settings
     ├── home/           # User home directory (Claude credentials live here)
@@ -185,9 +183,9 @@ Run `bootstrap` first, or specify the volume path:
 
 ### "Docker image not found"
 
-Build the image:
+The image builds automatically on first start, but you can manually build:
 ```bash
-docker build -t portable-claude:latest .
+claude-env build-image
 ```
 
 ### "Docker is not running"
@@ -196,9 +194,9 @@ Start Docker Desktop.
 
 ### Container exits immediately
 
-The Docker image was rebuilt incorrectly. Rebuild:
+Rebuild the Docker image:
 ```bash
-docker build -t portable-claude:latest .
+claude-env build-image --force
 ```
 
 ## Development
@@ -210,14 +208,16 @@ go test ./...
 # Build
 go build -o claude-env ./cmd/claude-env
 
-# Rebuild Docker image after Dockerfile changes
-docker build -t portable-claude:latest .
+# Rebuild Docker image (updates embedded Dockerfile too)
+cp Dockerfile internal/embedded/Dockerfile
+go build -o claude-env ./cmd/claude-env
+claude-env build-image --force
 ```
 
 ## License
 
-Private - All rights reserved
+MIT License
 
 ## Contributing
 
-This is a private project. Please contact the maintainer for contribution guidelines.
+Contributions welcome! Please open an issue or PR.

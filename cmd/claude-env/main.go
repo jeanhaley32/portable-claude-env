@@ -9,6 +9,7 @@ import (
 
 	"github.com/jeanhaley32/portable-claude-env/internal/constants"
 	"github.com/jeanhaley32/portable-claude-env/internal/docker"
+	"github.com/jeanhaley32/portable-claude-env/internal/embedded"
 	"github.com/jeanhaley32/portable-claude-env/internal/platform"
 	"github.com/jeanhaley32/portable-claude-env/internal/repo"
 	"github.com/jeanhaley32/portable-claude-env/internal/state"
@@ -30,6 +31,7 @@ func main() {
 		newStartCmd(),
 		newStopCmd(),
 		newStatusCmd(),
+		newBuildImageCmd(),
 		newVersionCmd(),
 	)
 
@@ -220,6 +222,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 	password, err := terminal.ReadPassword("Enter volume password: ")
 	if err != nil {
 		return fmt.Errorf("password error: %w", err)
+	}
+
+	// Check if Docker image exists, build if needed
+	if !embedded.ImageExists(docker.DefaultImageName) {
+		fmt.Printf("Docker image '%s' not found. Building...\n", docker.DefaultImageName)
+		if err := embedded.BuildImage(docker.DefaultImageName); err != nil {
+			return fmt.Errorf("failed to build Docker image: %w", err)
+		}
+		fmt.Println("Docker image built successfully!")
 	}
 
 	// Mount volume
@@ -416,9 +427,39 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// Image status
 	if !state.CheckImageExists(docker.DefaultImageName) {
 		fmt.Printf("\nWarning: Docker image '%s' not found.\n", docker.DefaultImageName)
-		fmt.Println("Build it with: docker build -t portable-claude:latest .")
+		fmt.Println("Build it with: claude-env build-image")
 	}
 
+	return nil
+}
+
+func newBuildImageCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "build-image",
+		Short: "Build the Docker image",
+		Long:  "Build the Docker image from the embedded Dockerfile. This is done automatically on first start.",
+		RunE:  runBuildImage,
+	}
+
+	cmd.Flags().Bool("force", false, "Rebuild even if image already exists")
+
+	return cmd
+}
+
+func runBuildImage(cmd *cobra.Command, args []string) error {
+	force, _ := cmd.Flags().GetBool("force")
+
+	if !force && embedded.ImageExists(docker.DefaultImageName) {
+		fmt.Printf("Docker image '%s' already exists. Use --force to rebuild.\n", docker.DefaultImageName)
+		return nil
+	}
+
+	fmt.Printf("Building Docker image '%s'...\n", docker.DefaultImageName)
+	if err := embedded.BuildImage(docker.DefaultImageName); err != nil {
+		return fmt.Errorf("failed to build image: %w", err)
+	}
+
+	fmt.Println("Docker image built successfully!")
 	return nil
 }
 
