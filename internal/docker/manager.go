@@ -55,16 +55,17 @@ func (m *Manager) Start(config ContainerConfig) error {
 	}
 
 	// Create and start container
-	// docker run -d --name <name> -v <volume>:/claude-env -v <workspace>:/workspace -it <image> tail -f /dev/null
+	// Override entrypoint since Dockerfile uses /bin/bash which doesn't work with tail command
+	// docker run -d --name <name> -v <volume>:/claude-env -v <workspace>:/workspace --entrypoint tail <image> -f /dev/null
 	cmd := exec.Command("docker", "run",
 		"-d",
 		"--name", config.ContainerName,
 		"-v", config.VolumeMountPoint+":/claude-env",
 		"-v", config.WorkspacePath+":/workspace",
 		"-w", "/workspace",
-		"-it",
+		"--entrypoint", "tail",
 		config.ImageName,
-		"tail", "-f", "/dev/null", // Keep container running
+		"-f", "/dev/null", // Keep container running
 	)
 	cmd.Stderr = os.Stderr
 
