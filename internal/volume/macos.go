@@ -78,8 +78,20 @@ func (m *MacOSVolumeManager) Mount(volumePath, password string) (string, error) 
 		return mountPoint, nil
 	}
 
-	// Mount with password via stdin
-	cmd := exec.Command("hdiutil", "attach", "-stdinpass", volumePath)
+	// Use a mount point under user's home directory to avoid Docker Desktop issues with /Volumes
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	mountPoint := filepath.Join(homeDir, ".claude-env", "mount")
+
+	// Ensure mount point directory exists
+	if err := os.MkdirAll(mountPoint, constants.DirPermissions); err != nil {
+		return "", fmt.Errorf("failed to create mount point directory: %w", err)
+	}
+
+	// Mount with password via stdin to custom mount point
+	cmd := exec.Command("hdiutil", "attach", "-stdinpass", "-mountpoint", mountPoint, volumePath)
 	cmd.Stdin = strings.NewReader(password)
 
 	output, err := cmd.Output()
@@ -90,11 +102,9 @@ func (m *MacOSVolumeManager) Mount(volumePath, password string) (string, error) 
 		return "", fmt.Errorf("failed to mount volume: %w", err)
 	}
 
-	// Parse output to find mount point
-	// Output format: /dev/disk4s1    Apple_APFS                      /Volumes/ClaudeEnv
-	mountPoint := m.parseMountPoint(string(output))
-	if mountPoint == "" {
-		return "", fmt.Errorf("volume mounted but could not determine mount point")
+	// Verify mount succeeded by checking output contains our mount point
+	if !strings.Contains(string(output), mountPoint) {
+		return "", fmt.Errorf("volume mounted but mount point not confirmed")
 	}
 
 	return mountPoint, nil
@@ -155,7 +165,19 @@ func (m *MacOSVolumeManager) parseMountPoint(output string) string {
 
 // findMountPoint checks if ClaudeEnv volume is currently mounted.
 func (m *MacOSVolumeManager) findMountPoint() string {
-	// Check standard mount point
+	// Check new mount point under home directory first (preferred for Docker compatibility)
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		homeMountPoint := filepath.Join(homeDir, ".claude-env", "mount")
+		if info, err := os.Stat(homeMountPoint); err == nil && info.IsDir() {
+			// Verify it's actually a mount by checking for content
+			entries, err := os.ReadDir(homeMountPoint)
+			if err == nil && len(entries) > 0 {
+				return homeMountPoint
+			}
+		}
+	}
+
+	// Fall back to standard /Volumes mount point (legacy)
 	if _, err := os.Stat(constants.MacOSMountPoint); err == nil {
 		return constants.MacOSMountPoint
 	}

@@ -113,24 +113,20 @@ func (m *Manager) IsRunning(containerName string) bool {
 	return strings.TrimSpace(string(output)) == "true"
 }
 
-// Exec replaces the current process with docker exec into the container.
-// This is used for interactive sessions.
+// Exec runs an interactive shell in the container and waits for it to exit.
+// This allows cleanup to happen after the user exits the shell.
 func (m *Manager) Exec(containerName string) error {
 	if containerName == "" {
 		containerName = DefaultContainerName
 	}
 
-	dockerPath, err := exec.LookPath("docker")
-	if err != nil {
-		return fmt.Errorf("docker not found in PATH: %w", err)
-	}
+	cmd := exec.Command("docker", "exec", "-it", containerName, "/bin/bash")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-	// Replace current process with docker exec
-	// Note: This function does not return on success
-	args := []string{"docker", "exec", "-it", containerName, "/bin/bash"}
-	env := os.Environ()
-
-	return execSyscall(dockerPath, args, env)
+	// Run and wait for user to exit
+	return cmd.Run()
 }
 
 // ExecCommand runs a command in the container and returns the output.
