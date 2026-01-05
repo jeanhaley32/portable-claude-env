@@ -8,6 +8,16 @@ import (
 	"strings"
 )
 
+// Pre-compiled regexes for sanitization (compiled once at package init)
+var (
+	pathSepRegex     = regexp.MustCompile(`[/:\\@\s]+`)
+	unsafeCharRegex  = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
+	multiHyphenRegex = regexp.MustCompile(`-+`)
+)
+
+// Maximum length for repository identifiers
+const maxIdentifierLength = 100
+
 // DefaultIdentifier implements Identifier using git commands.
 type DefaultIdentifier struct{}
 
@@ -69,19 +79,28 @@ func normalizeRemoteURL(url string) string {
 // sanitizeName converts a string to a filesystem-safe name.
 func sanitizeName(name string) string {
 	// Replace path separators and special characters with hyphens
-	re := regexp.MustCompile(`[/:\\@\s]+`)
-	name = re.ReplaceAllString(name, "-")
+	name = pathSepRegex.ReplaceAllString(name, "-")
 
 	// Remove any remaining unsafe characters
-	re = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
-	name = re.ReplaceAllString(name, "")
+	name = unsafeCharRegex.ReplaceAllString(name, "")
 
 	// Collapse multiple hyphens
-	re = regexp.MustCompile(`-+`)
-	name = re.ReplaceAllString(name, "-")
+	name = multiHyphenRegex.ReplaceAllString(name, "-")
 
 	// Trim leading/trailing hyphens
 	name = strings.Trim(name, "-")
+
+	// Limit length to avoid filesystem issues
+	if len(name) > maxIdentifierLength {
+		name = name[:maxIdentifierLength]
+		// Ensure we don't end with a hyphen after truncation
+		name = strings.TrimRight(name, "-")
+	}
+
+	// Return a default if name is empty
+	if name == "" {
+		name = "unknown-repo"
+	}
 
 	return name
 }

@@ -1,10 +1,30 @@
 package volume
 
+import (
+	"fmt"
+
+	"github.com/jeanhaley32/portable-claude-env/internal/constants"
+)
+
 // BootstrapConfig holds configuration for creating a new encrypted volume.
 type BootstrapConfig struct {
 	Path     string
 	SizeGB   int
 	Password string
+}
+
+// Validate checks that the bootstrap configuration is valid.
+func (c *BootstrapConfig) Validate() error {
+	if c.Path == "" {
+		return fmt.Errorf("volume path is required")
+	}
+	if c.SizeGB <= 0 {
+		return fmt.Errorf("volume size must be positive, got %d", c.SizeGB)
+	}
+	if len(c.Password) < constants.MinPasswordLength {
+		return fmt.Errorf("password must be at least %d characters", constants.MinPasswordLength)
+	}
+	return nil
 }
 
 // VolumeManager handles OS-specific encrypted volume operations.
@@ -23,4 +43,10 @@ type VolumeManager interface {
 
 	// GetVolumePath returns the expected volume file path for the given base directory.
 	GetVolumePath(baseDir string) string
+
+	// IsMounted returns true if the volume is currently mounted.
+	IsMounted() bool
+
+	// GetMountPoint returns the current mount point if mounted, empty string otherwise.
+	GetMountPoint() string
 }
