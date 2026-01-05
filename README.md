@@ -164,6 +164,36 @@ The symlink is created inside the container and is automatically gitignored.
 - Network traffic (not encrypted by this tool)
 - Runtime memory (standard Docker security applies)
 
+### AI Model Isolation
+
+A key security benefit of this project is **sandboxing the AI model** from your system. When Claude Code runs inside the container, it can only access:
+
+```
+/workspace/     ← Your current project (explicitly mounted)
+/claude-env/    ← Encrypted volume (home directory, credentials, docs)
+```
+
+**The AI model CANNOT access:**
+- Your host home directory (`~/`)
+- Other projects or repositories
+- System files and configurations
+- SSH keys, GPG keys, or other credentials outside the encrypted volume
+- Parent directories of your project
+- Any path not explicitly mounted
+
+This is a significant security improvement over running AI coding assistants directly on your host machine, where they typically have access to your entire home directory and potentially sensitive files.
+
+**Isolation layers:**
+
+| Layer | Protection |
+|-------|------------|
+| Docker container | Process isolation from host |
+| Explicit mounts only | Only two paths visible to AI |
+| Non-root user | Container runs as unprivileged `claude` user |
+| No host networking | Container uses isolated network namespace |
+
+This design ensures that even if the AI attempts to access files outside its sandbox, the container boundary prevents it.
+
 ## File Locations
 
 | File | Description |
