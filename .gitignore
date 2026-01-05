@@ -1,0 +1,24 @@
+# Encrypted volumes
+claude-env.dmg
+claude-env.img
+
+# Shadow documentation (NEVER commit)
+_docs/
+
+# Go build artifacts
+/claude-env
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+coverage.out
+*.test
