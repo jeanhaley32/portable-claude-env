@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -297,7 +298,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Environment stopped.")
 
+	// Ignore common exit codes (0 = normal, 130 = Ctrl+C)
 	if execErr != nil {
+		if exitErr, ok := execErr.(*exec.ExitError); ok {
+			code := exitErr.ExitCode()
+			if code == 0 || code == 130 {
+				return nil
+			}
+		}
 		return fmt.Errorf("shell exited with error: %w", execErr)
 	}
 
