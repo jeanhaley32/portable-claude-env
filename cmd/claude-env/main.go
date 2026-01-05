@@ -263,9 +263,31 @@ func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Println("Entering container... (type 'exit' to leave)")
 	fmt.Println("")
 
-	// Exec into container (replaces current process)
-	if err := dockerManager.Exec(docker.DefaultContainerName); err != nil {
-		return fmt.Errorf("failed to exec into container: %w", err)
+	// Exec into container and wait for user to exit
+	execErr := dockerManager.Exec(docker.DefaultContainerName)
+
+	// Clean up after user exits the shell
+	fmt.Println("")
+	fmt.Println("Cleaning up...")
+
+	// Stop container
+	if err := dockerManager.Stop(docker.DefaultContainerName); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to stop container: %v\n", err)
+	} else {
+		fmt.Println("Container stopped.")
+	}
+
+	// Unmount volume
+	if err := volumeManager.Unmount(mountPoint); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to unmount volume: %v\n", err)
+	} else {
+		fmt.Println("Volume unmounted.")
+	}
+
+	fmt.Println("Environment stopped.")
+
+	if execErr != nil {
+		return fmt.Errorf("shell exited with error: %w", execErr)
 	}
 
 	return nil
