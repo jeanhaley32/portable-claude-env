@@ -18,11 +18,12 @@ func (c *BootstrapConfig) Validate() error {
 	if c.Path == "" {
 		return fmt.Errorf("volume path is required")
 	}
-	if c.SizeGB <= 0 {
-		return fmt.Errorf("volume size must be positive, got %d", c.SizeGB)
+	if c.SizeGB < constants.MinVolumeSizeGB || c.SizeGB > constants.MaxVolumeSizeGB {
+		return fmt.Errorf("volume size must be between %d and %d GB, got %d",
+			constants.MinVolumeSizeGB, constants.MaxVolumeSizeGB, c.SizeGB)
 	}
-	if len(c.Password) < constants.MinPasswordLength {
-		return fmt.Errorf("password must be at least %d characters", constants.MinPasswordLength)
+	if c.Password == "" {
+		return fmt.Errorf("password is required")
 	}
 	return nil
 }

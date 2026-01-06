@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -31,6 +33,7 @@ func main() {
 		newBootstrapCmd(),
 		newStartCmd(),
 		newStopCmd(),
+		newLockCmd(),
 		newStatusCmd(),
 		newBuildImageCmd(),
 		newVersionCmd(),
@@ -101,10 +104,6 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("password error: %w", err)
-	}
-
-	if len(password) < constants.MinPasswordLength {
-		return fmt.Errorf("password must be at least %d characters", constants.MinPasswordLength)
 	}
 
 	fmt.Printf("Creating encrypted volume at %s...\n", volumePath)
@@ -234,15 +233,48 @@ func runStart(cmd *cobra.Command, args []string) error {
 		fmt.Println("Docker image built successfully!")
 	}
 
-	// Mount volume
-	fmt.Println("Mounting encrypted volume...")
-	mountPoint, err := volumeManager.Mount(volumePath, password)
-	if err != nil {
-		return fmt.Errorf("failed to mount volume: %w", err)
+	// Verify Docker Desktop can access /tmp for encrypted volume mounts
+	fmt.Println("Checking Docker file sharing configuration...")
+	if err := dockerManager.CheckTmpFileSharing(); err != nil {
+		return err
 	}
-	fmt.Printf("Volume mounted at %s\n", mountPoint)
 
-	// Start container
+	// Pre-start cleanup: remove any stale container from previous runs
+	// This prevents Docker mount conflicts even with stopped containers
+	// Use docker rm -f directly for reliable cleanup regardless of container state
+	fmt.Println("Checking for stale containers...")
+	cleanupCmd := exec.Command("docker", "rm", "-f", docker.DefaultContainerName)
+	cleanupOutput, cleanupErr := cleanupCmd.CombinedOutput()
+	if cleanupErr != nil {
+		fmt.Fprintf(os.Stderr, "[pre-start] No container to remove (or error): %s\n", strings.TrimSpace(string(cleanupOutput)))
+	} else {
+		fmt.Fprintf(os.Stderr, "[pre-start] Removed stale container: %s\n", strings.TrimSpace(string(cleanupOutput)))
+		// Give Docker time to release mount references
+		fmt.Fprintf(os.Stderr, "[pre-start] Waiting for Docker to release mount references...\n")
+		time.Sleep(1 * time.Second)
+	}
+
+	// Check if volume is already mounted (reuse existing mount for fast re-entry)
+	var mountPoint string
+	if existingMount := volumeManager.GetMountPoint(); existingMount != "" {
+		fmt.Printf("Volume already mounted at %s\n", existingMount)
+		mountPoint = existingMount
+	} else {
+		// Mount volume
+		fmt.Println("Mounting encrypted volume...")
+		mountPoint, err = volumeManager.Mount(volumePath, password)
+		if err != nil {
+			return fmt.Errorf("failed to mount volume: %w", err)
+		}
+		fmt.Printf("Volume mounted at %s\n", mountPoint)
+	}
+
+	// Refresh Docker's VirtioFS cache for the mount point
+	// This is necessary because Docker Desktop caches mount information
+	fmt.Println("Preparing Docker mount...")
+	_ = dockerManager.RefreshMountCache(mountPoint)
+
+	// Start container with retry on Docker mount cache errors
 	fmt.Println("Starting container...")
 	containerConfig := docker.ContainerConfig{
 		ImageName:        docker.DefaultImageName,
@@ -251,11 +283,47 @@ func runStart(cmd *cobra.Command, args []string) error {
 		WorkspacePath:    workspacePath,
 	}
 
-	if err := dockerManager.Start(containerConfig); err != nil {
+	startErr := dockerManager.Start(containerConfig)
+	if startErr != nil && strings.Contains(startErr.Error(), "file exists") {
+		// Docker Desktop has stale mount cache - clean up and retry
+		fmt.Println("Docker mount cache conflict detected, cleaning up...")
+
+		// Remove any partial container
+		retryCleanupCmd := exec.Command("docker", "rm", "-f", docker.DefaultContainerName)
+		_ = retryCleanupCmd.Run()
+
+		// Unmount and remove mount directory (Unmount now handles directory cleanup)
+		_ = volumeManager.Unmount(mountPoint)
+
+		// Wait for Docker Desktop to clear its cache
+		fmt.Println("Waiting for Docker to refresh...")
+		time.Sleep(2 * time.Second)
+
+		// Remount
+		fmt.Println("Remounting volume...")
+		mountPoint, err = volumeManager.Mount(volumePath, password)
+		if err != nil {
+			return fmt.Errorf("failed to remount volume after cleanup: %w", err)
+		}
+
+		// Update config with new mount point
+		containerConfig.VolumeMountPoint = mountPoint
+
+		// Retry start
+		fmt.Println("Retrying container start...")
+		startErr = dockerManager.Start(containerConfig)
+	}
+
+	if startErr != nil {
+		// Clean up any partially created container before returning error
+		fmt.Fprintf(os.Stderr, "[error] Cleaning up failed container...\n")
+		failCleanupCmd := exec.Command("docker", "rm", "-f", docker.DefaultContainerName)
+		_ = failCleanupCmd.Run()
+
 		if unmountErr := volumeManager.Unmount(mountPoint); unmountErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: cleanup failed to unmount volume: %v\n", unmountErr)
 		}
-		return fmt.Errorf("failed to start container: %w", err)
+		return fmt.Errorf("failed to start container: %w", startErr)
 	}
 	fmt.Println("Container started!")
 
@@ -282,21 +350,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Println("")
 	fmt.Println("Cleaning up...")
 
-	// Stop container
+	// Stop container (keep volume mounted for fast re-entry)
 	if err := dockerManager.Stop(docker.DefaultContainerName); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to stop container: %v\n", err)
 	} else {
 		fmt.Println("Container stopped.")
 	}
 
-	// Unmount volume
-	if err := volumeManager.Unmount(mountPoint); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to unmount volume: %v\n", err)
-	} else {
-		fmt.Println("Volume unmounted.")
-	}
-
-	fmt.Println("Environment stopped.")
+	fmt.Println("Volume remains unlocked for quick re-entry.")
+	fmt.Println("Run 'claude-env lock' when done to secure your credentials.")
 
 	// Ignore common exit codes (0 = normal, 130 = Ctrl+C)
 	if execErr != nil {
@@ -315,19 +377,105 @@ func runStart(cmd *cobra.Command, args []string) error {
 func newStopCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "stop",
-		Short: "Stop container and unmount volume",
+		Short: "Stop container (keeps volume mounted)",
 		RunE:  runStop,
 	}
 }
 
-func runStop(cmd *cobra.Command, args []string) error {
-	dockerManager := docker.NewManager()
+func newLockCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "lock",
+		Short: "Unmount encrypted volume to secure credentials (restarts Docker)",
+		Long: `Unmounts the encrypted volume, securing all credentials and data.
+Use this when you're done working for the day.
 
-	// Get volume manager for unmount
+WARNING: This command restarts Docker Desktop to clear its cache.
+All running Docker containers will be stopped, not just claude-env.
+Make sure to save your work in other containers before locking.`,
+		RunE: runLock,
+	}
+}
+
+func runLock(cmd *cobra.Command, args []string) error {
+	// Create volume manager
 	volumeManager, err := volume.New()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not create volume manager: %v\n", err)
+		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
+
+	// Check if volume is mounted
+	if !volumeManager.IsMounted() {
+		fmt.Println("Volume is not mounted. Nothing to lock.")
+		return nil
+	}
+
+	// Confirm with user since this restarts Docker
+	fmt.Println("This will restart Docker Desktop and stop all running containers.")
+	fmt.Print("Continue? [y/N] ")
+	var response string
+	fmt.Scanln(&response)
+	if response != "y" && response != "Y" {
+		fmt.Println("Cancelled.")
+		return nil
+	}
+
+	// Stop any running container first
+	dockerManager := docker.NewManager()
+	if dockerManager.IsRunning(docker.DefaultContainerName) {
+		fmt.Println("Stopping running container...")
+		if err := dockerManager.Stop(docker.DefaultContainerName); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to stop container: %v\n", err)
+		}
+	}
+
+	// Unmount the volume
+	fmt.Println("Unmounting encrypted volume...")
+	if err := volumeManager.Unmount(""); err != nil {
+		return fmt.Errorf("failed to unmount volume: %w", err)
+	}
+
+	// Restart Docker Desktop to clear VirtioFS cache
+	// This ensures next 'start' will work correctly
+	fmt.Println("Refreshing Docker Desktop...")
+	if err := restartDockerDesktop(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		fmt.Println("You may need to restart Docker Desktop manually before next start.")
+	}
+
+	fmt.Println("Volume locked. Your credentials are now secured.")
+	return nil
+}
+
+func restartDockerDesktop() error {
+	// Quit Docker Desktop
+	quitCmd := exec.Command("osascript", "-e", `quit app "Docker Desktop"`)
+	if err := quitCmd.Run(); err != nil {
+		return fmt.Errorf("failed to quit Docker Desktop: %w", err)
+	}
+
+	time.Sleep(2 * time.Second)
+
+	// Start Docker Desktop
+	startCmd := exec.Command("open", "-a", "Docker Desktop")
+	if err := startCmd.Run(); err != nil {
+		return fmt.Errorf("failed to start Docker Desktop: %w", err)
+	}
+
+	// Wait for Docker to be ready
+	fmt.Println("Waiting for Docker Desktop...")
+	for i := 0; i < 30; i++ {
+		checkCmd := exec.Command("docker", "info")
+		if err := checkCmd.Run(); err == nil {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	return fmt.Errorf("Docker Desktop did not become ready in time")
+}
+
+func runStop(cmd *cobra.Command, args []string) error {
+	dockerManager := docker.NewManager()
 
 	// Stop container (symlink inside container is destroyed with it)
 	fmt.Println("Stopping container...")
@@ -337,17 +485,8 @@ func runStop(cmd *cobra.Command, args []string) error {
 		fmt.Println("Container stopped.")
 	}
 
-	// Unmount volume
-	if volumeManager != nil && volumeManager.IsMounted() {
-		fmt.Println("Unmounting volume...")
-		if err := volumeManager.Unmount(""); err != nil {
-			fmt.Printf("Warning: Failed to unmount volume: %v\n", err)
-		} else {
-			fmt.Println("Volume unmounted.")
-		}
-	}
-
-	fmt.Println("Environment stopped.")
+	// Keep volume mounted for quick re-entry
+	fmt.Println("Volume remains mounted. Run 'claude-env lock' to unmount and secure.")
 	return nil
 }
 

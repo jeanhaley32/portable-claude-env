@@ -75,20 +75,36 @@ func ReadPasswordSecure(prompt string) (*SecurePassword, error) {
 }
 
 // ReadPasswordConfirm prompts for a password twice and verifies they match.
+// Deprecated: Use ReadPasswordConfirmSecure for better memory safety.
 func ReadPasswordConfirm(prompt, confirmPrompt string) (string, error) {
-	password, err := ReadPassword(prompt)
+	password, err := ReadPasswordConfirmSecure(prompt, confirmPrompt)
 	if err != nil {
 		return "", err
 	}
+	// Note: caller should clear password when done
+	return password.String(), nil
+}
 
-	confirm, err := ReadPassword(confirmPrompt)
+// ReadPasswordConfirmSecure prompts for a password twice, verifies they match,
+// and returns a SecurePassword that can be cleared from memory.
+func ReadPasswordConfirmSecure(prompt, confirmPrompt string) (*SecurePassword, error) {
+	password, err := ReadPasswordSecure(prompt)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	if password != confirm {
-		return "", fmt.Errorf("passwords do not match")
+	confirm, err := ReadPasswordSecure(confirmPrompt)
+	if err != nil {
+		password.Clear()
+		return nil, err
 	}
 
+	if password.String() != confirm.String() {
+		password.Clear()
+		confirm.Clear()
+		return nil, fmt.Errorf("passwords do not match")
+	}
+
+	confirm.Clear()
 	return password, nil
 }
