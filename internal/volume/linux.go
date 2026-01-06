@@ -55,16 +55,17 @@ func (l *LinuxVolumeManager) GetVolumePath(baseDir string) string {
 	return filepath.Join(baseDir, constants.LinuxVolumeFile)
 }
 
-// IsMounted returns true if the volume is currently mounted.
-func (l *LinuxVolumeManager) IsMounted() bool {
-	// TODO: Check if /dev/mapper/claude-env exists and is mounted
+// IsMounted returns true if the specified volume is currently mounted.
+func (l *LinuxVolumeManager) IsMounted(volumePath string) bool {
+	// TODO: Check if specific volume is mounted via /dev/mapper
+	// For now, just check if the mount point exists
 	_, err := os.Stat(constants.LinuxMountPoint)
 	return err == nil
 }
 
-// GetMountPoint returns the current mount point if mounted, empty string otherwise.
-func (l *LinuxVolumeManager) GetMountPoint() string {
-	if l.IsMounted() {
+// GetMountPoint returns the mount point for the specified volume if mounted, empty string otherwise.
+func (l *LinuxVolumeManager) GetMountPoint(volumePath string) string {
+	if l.IsMounted(volumePath) {
 		return constants.LinuxMountPoint
 	}
 	return ""

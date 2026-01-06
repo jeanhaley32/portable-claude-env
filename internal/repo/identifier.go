@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,9 @@ var (
 
 // Maximum length for repository identifiers
 const maxIdentifierLength = 100
+
+// ShortIDLength is the length of the short unique identifier (8 hex chars = 4 bytes)
+const ShortIDLength = 8
 
 // DefaultIdentifier implements Identifier using git commands.
 type DefaultIdentifier struct{}
@@ -40,6 +45,30 @@ func (d *DefaultIdentifier) GetRepoID(workspacePath string) (string, error) {
 	}
 
 	return normalizeRemoteURL(strings.TrimSpace(string(output))), nil
+}
+
+// GetShortID returns a short unique identifier for the workspace.
+// This is a hash-based ID suitable for container names and mount paths.
+// Format: 8 character hex string (e.g., "a1b2c3d4")
+func (d *DefaultIdentifier) GetShortID(workspacePath string) (string, error) {
+	repoID, err := d.GetRepoID(workspacePath)
+	if err != nil {
+		return "", err
+	}
+
+	// Hash the repoID to get a consistent short identifier
+	hash := sha256.Sum256([]byte(repoID))
+	return hex.EncodeToString(hash[:])[:ShortIDLength], nil
+}
+
+// GetContainerName returns the container name for the workspace.
+// Format: "claude-<shortID>" (e.g., "claude-a1b2c3d4")
+func (d *DefaultIdentifier) GetContainerName(workspacePath string) (string, error) {
+	shortID, err := d.GetShortID(workspacePath)
+	if err != nil {
+		return "", err
+	}
+	return "claude-" + shortID, nil
 }
 
 func (d *DefaultIdentifier) GetWorkspaceRoot(path string) (string, error) {

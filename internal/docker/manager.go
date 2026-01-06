@@ -34,7 +34,6 @@ const (
 	DefaultContainerName = "portable-claude"
 )
 
-
 // Manager implements DockerManager using the Docker CLI.
 type Manager struct{}
 

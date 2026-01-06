@@ -52,30 +52,33 @@ func setupShutdownHandler(cleanup func()) func() {
 	}
 }
 
-// lockVolumeOnShutdown performs emergency volume lock on shutdown.
-func lockVolumeOnShutdown() {
-	volumeManager, err := volume.New()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[shutdown] Warning: could not create volume manager: %v\n", err)
-		return
-	}
-
-	// Stop container if running
-	dockerManager := docker.NewManager()
-	if dockerManager.IsRunning(docker.DefaultContainerName) {
-		fmt.Fprintf(os.Stderr, "[shutdown] Stopping container...\n")
-		if err := dockerManager.Stop(docker.DefaultContainerName); err != nil {
-			fmt.Fprintf(os.Stderr, "[shutdown] Warning: failed to stop container: %v\n", err)
+// createShutdownCleanup creates a cleanup function that locks the specified volume.
+func createShutdownCleanup(volumePath, containerName string) func() {
+	return func() {
+		volumeManager, err := volume.New()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[shutdown] Warning: could not create volume manager: %v\n", err)
+			return
 		}
-	}
 
-	// Unmount volume if mounted
-	if volumeManager.IsMounted() {
-		fmt.Fprintf(os.Stderr, "[shutdown] Locking volume...\n")
-		if err := volumeManager.Unmount(""); err != nil {
-			fmt.Fprintf(os.Stderr, "[shutdown] Warning: failed to unmount volume: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "[shutdown] Volume locked successfully.\n")
+		// Stop container if running
+		dockerManager := docker.NewManager()
+		if dockerManager.IsRunning(containerName) {
+			fmt.Fprintf(os.Stderr, "[shutdown] Stopping container %s...\n", containerName)
+			if err := dockerManager.Stop(containerName); err != nil {
+				fmt.Fprintf(os.Stderr, "[shutdown] Warning: failed to stop container: %v\n", err)
+			}
+		}
+
+		// Get the mount point for this specific volume (not any volume)
+		mountPoint := volumeManager.GetMountPoint(volumePath)
+		if mountPoint != "" {
+			fmt.Fprintf(os.Stderr, "[shutdown] Locking volume at %s...\n", mountPoint)
+			if err := volumeManager.Unmount(mountPoint); err != nil {
+				fmt.Fprintf(os.Stderr, "[shutdown] Warning: failed to unmount volume: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "[shutdown] Volume locked successfully.\n")
+			}
 		}
 	}
 }
@@ -271,11 +274,18 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to resolve workspace path: %w", err)
 	}
 
-	// Get repo ID for symlink
+	// Get repo ID for symlink and container name
 	repoID, err := repoIdentifier.GetRepoID(workspacePath)
 	if err != nil {
 		return fmt.Errorf("failed to identify repository: %w", err)
 	}
+
+	// Get unique container name for this workspace
+	containerName, err := repoIdentifier.GetContainerName(workspacePath)
+	if err != nil {
+		return fmt.Errorf("failed to generate container name: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "[start] Using container name: %s\n", containerName)
 
 	// Prompt for password
 	password, err := terminal.ReadPassword("Enter volume password: ")
@@ -302,7 +312,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// This prevents Docker mount conflicts even with stopped containers
 	// Use docker rm -f directly for reliable cleanup regardless of container state
 	fmt.Println("Checking for stale containers...")
-	cleanupCmd := exec.Command("docker", "rm", "-f", docker.DefaultContainerName)
+	cleanupCmd := exec.Command("docker", "rm", "-f", containerName)
 	cleanupOutput, cleanupErr := cleanupCmd.CombinedOutput()
 	if cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "[pre-start] No container to remove (or error): %s\n", strings.TrimSpace(string(cleanupOutput)))
@@ -315,7 +325,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Check if volume is already mounted (reuse existing mount for fast re-entry)
 	var mountPoint string
-	if existingMount := volumeManager.GetMountPoint(); existingMount != "" {
+	if existingMount := volumeManager.GetMountPoint(volumePath); existingMount != "" {
 		fmt.Printf("Volume already mounted at %s\n", existingMount)
 		mountPoint = existingMount
 	} else {
@@ -330,7 +340,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Setup shutdown handler to lock volume on crash/termination
 	// This ensures the volume is secured if the process is killed unexpectedly
-	cancelShutdown := setupShutdownHandler(lockVolumeOnShutdown)
+	cancelShutdown := setupShutdownHandler(createShutdownCleanup(volumePath, containerName))
 	defer cancelShutdown()
 
 	// Refresh Docker's VirtioFS cache for the mount point
@@ -345,7 +355,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Println("Starting container...")
 	containerConfig := docker.ContainerConfig{
 		ImageName:        docker.DefaultImageName,
-		ContainerName:    docker.DefaultContainerName,
+		ContainerName:    containerName,
 		VolumeMountPoint: mountPoint,
 		WorkspacePath:    workspacePath,
 	}
@@ -356,7 +366,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		fmt.Println("Docker mount cache conflict detected, cleaning up...")
 
 		// Remove any partial container (errors ignored - container may not exist)
-		retryCleanupCmd := exec.Command("docker", "rm", "-f", docker.DefaultContainerName)
+		retryCleanupCmd := exec.Command("docker", "rm", "-f", containerName)
 		if err := retryCleanupCmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "[cleanup] Container removal: %v\n", err)
 		}
@@ -388,7 +398,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if startErr != nil {
 		// Clean up any partially created container before returning error
 		fmt.Fprintf(os.Stderr, "[error] Cleaning up failed container...\n")
-		failCleanupCmd := exec.Command("docker", "rm", "-f", docker.DefaultContainerName)
+		failCleanupCmd := exec.Command("docker", "rm", "-f", containerName)
 		if err := failCleanupCmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "[cleanup] Container removal: %v\n", err)
 		}
@@ -402,9 +412,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Setup symlink inside container
 	fmt.Println("Setting up shadow documentation...")
-	if err := dockerManager.SetupWorkspaceSymlink(docker.DefaultContainerName, repoID); err != nil {
+	if err := dockerManager.SetupWorkspaceSymlink(containerName, repoID); err != nil {
 		// Clean up on failure
-		if stopErr := dockerManager.Stop(docker.DefaultContainerName); stopErr != nil {
+		if stopErr := dockerManager.Stop(containerName); stopErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: cleanup failed to stop container: %v\n", stopErr)
 		}
 		if unmountErr := volumeManager.Unmount(mountPoint); unmountErr != nil {
@@ -417,14 +427,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Println("")
 
 	// Exec into container and wait for user to exit
-	execErr := dockerManager.Exec(docker.DefaultContainerName)
+	execErr := dockerManager.Exec(containerName)
 
 	// Clean up after user exits the shell
 	fmt.Println("")
 	fmt.Println("Cleaning up...")
 
 	// Stop container (keep volume mounted for fast re-entry)
-	if err := dockerManager.Stop(docker.DefaultContainerName); err != nil {
+	if err := dockerManager.Stop(containerName); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to stop container: %v\n", err)
 	} else {
 		fmt.Println("Container stopped.")
@@ -514,7 +524,7 @@ func runUnlock(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check if already mounted
-	if existingMount := volumeManager.GetMountPoint(); existingMount != "" {
+	if existingMount := volumeManager.GetMountPoint(volumePath); existingMount != "" {
 		// Output parsable values
 		fmt.Printf("MOUNT_POINT=%s\n", existingMount)
 		fmt.Printf("STATUS=already_mounted\n")
@@ -566,41 +576,77 @@ func runLock(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
 
-	// Check if volume is mounted
-	if !volumeManager.IsMounted() {
+	// Find volume path and container name for current directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	volumePath := volumeManager.GetVolumePath(cwd)
+
+	repoIdentifier := repo.NewIdentifier()
+	workspacePath, err := repoIdentifier.GetWorkspaceRoot(cwd)
+	if err != nil {
+		workspacePath = cwd
+	}
+	containerName, err := repoIdentifier.GetContainerName(workspacePath)
+	if err != nil {
+		containerName = docker.DefaultContainerName // Fallback
+	}
+
+	// Get the mount point for this specific volume (not any volume)
+	mountPoint := volumeManager.GetMountPoint(volumePath)
+	if mountPoint == "" {
 		fmt.Printf("STATUS=not_mounted\n")
+		fmt.Printf("VOLUME_PATH=%s\n", volumePath)
 		fmt.Fprintf(os.Stderr, "Volume is not mounted. Nothing to lock.\n")
 		return nil
 	}
 
 	// Stop any running container first
 	dockerManager := docker.NewManager()
-	if dockerManager.IsRunning(docker.DefaultContainerName) {
-		fmt.Fprintf(os.Stderr, "Stopping running container...\n")
-		if err := dockerManager.Stop(docker.DefaultContainerName); err != nil {
+	if dockerManager.IsRunning(containerName) {
+		fmt.Fprintf(os.Stderr, "Stopping running container %s...\n", containerName)
+		if err := dockerManager.Stop(containerName); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to stop container: %v\n", err)
 		}
 	}
 
-	// Unmount the volume (this also clears VM cache via drop_caches)
-	fmt.Fprintf(os.Stderr, "Unmounting encrypted volume...\n")
-	if err := volumeManager.Unmount(""); err != nil {
+	// Unmount the specific volume (this also clears VM cache via drop_caches)
+	fmt.Fprintf(os.Stderr, "Unmounting encrypted volume at %s...\n", mountPoint)
+	if err := volumeManager.Unmount(mountPoint); err != nil {
 		return fmt.Errorf("failed to unmount volume: %w", err)
 	}
 
 	// Output parsable values to stdout
 	fmt.Printf("STATUS=locked\n")
+	fmt.Printf("VOLUME_PATH=%s\n", volumePath)
 
 	fmt.Fprintf(os.Stderr, "Volume locked. Your credentials are now secured.\n")
 	return nil
 }
 
 func runStop(cmd *cobra.Command, args []string) error {
+	// Get container name for current directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	repoIdentifier := repo.NewIdentifier()
+	workspacePath, err := repoIdentifier.GetWorkspaceRoot(cwd)
+	if err != nil {
+		workspacePath = cwd
+	}
+	containerName, err := repoIdentifier.GetContainerName(workspacePath)
+	if err != nil {
+		containerName = docker.DefaultContainerName // Fallback
+	}
+
 	dockerManager := docker.NewManager()
 
 	// Stop container (symlink inside container is destroyed with it)
-	fmt.Println("Stopping container...")
-	if err := dockerManager.Stop(docker.DefaultContainerName); err != nil {
+	fmt.Printf("Stopping container %s...\n", containerName)
+	if err := dockerManager.Stop(containerName); err != nil {
 		fmt.Printf("Warning: Failed to stop container: %v\n", err)
 	} else {
 		fmt.Println("Container stopped.")
@@ -644,8 +690,19 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		volumePath = volumeManager.GetVolumePath(cwd)
 	}
 
+	// Get container name for current directory
+	repoIdentifier := repo.NewIdentifier()
+	workspacePath, err := repoIdentifier.GetWorkspaceRoot(cwd)
+	if err != nil {
+		workspacePath = cwd
+	}
+	containerName, err := repoIdentifier.GetContainerName(workspacePath)
+	if err != nil {
+		containerName = docker.DefaultContainerName // Fallback
+	}
+
 	// Create detector
-	detector := state.NewDetector(volumePath, docker.DefaultContainerName, cwd)
+	detector := state.NewDetector(volumePath, containerName, cwd)
 	envState := detector.Detect()
 
 	// Display status

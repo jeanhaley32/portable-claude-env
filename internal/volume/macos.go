@@ -154,8 +154,8 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 func (m *MacOSVolumeManager) Mount(volumePath, password string) (string, error) {
 	fmt.Fprintf(os.Stderr, "[mount] Attempting to mount: %s\n", volumePath)
 
-	// Check if already mounted
-	if mountPoint := m.findMountPoint(); mountPoint != "" {
+	// Check if this specific volume is already mounted
+	if mountPoint := m.findMountPointForVolume(volumePath); mountPoint != "" {
 		fmt.Fprintf(os.Stderr, "[mount] Found existing mount at: %s\n", mountPoint)
 		return mountPoint, nil
 	}
@@ -219,7 +219,8 @@ func (m *MacOSVolumeManager) generateUniqueMountPoint() (string, error) {
 
 func (m *MacOSVolumeManager) Unmount(mountPoint string) error {
 	if mountPoint == "" {
-		mountPoint = m.findMountPoint()
+		// If no mount point specified, try to find any mounted claude-env volume
+		mountPoint = m.findAnyMountedVolume()
 		if mountPoint == "" {
 			return nil // Not mounted, nothing to do
 		}
@@ -321,8 +322,9 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string) error {
 	return nil
 }
 
-// findMountPoint checks if ClaudeEnv volume is currently mounted.
-func (m *MacOSVolumeManager) findMountPoint() string {
+// findAnyMountedVolume finds the mount point for any mounted claude-env volume.
+// This is a fallback for cases where we don't know the specific volume path.
+func (m *MacOSVolumeManager) findAnyMountedVolume() string {
 	// Check for our unique mount points in /tmp
 	entries, err := os.ReadDir("/tmp")
 	if err != nil {
@@ -348,12 +350,87 @@ func (m *MacOSVolumeManager) findMountPoint() string {
 	return ""
 }
 
-// IsMounted returns true if the volume is currently mounted.
-func (m *MacOSVolumeManager) IsMounted() bool {
-	return m.findMountPoint() != ""
+// findMountPointForVolume uses hdiutil info to find the mount point for a specific volume file.
+func (m *MacOSVolumeManager) findMountPointForVolume(volumePath string) string {
+	if volumePath == "" {
+		return ""
+	}
+
+	// Resolve to absolute path for comparison
+	absVolumePath, err := filepath.Abs(volumePath)
+	if err != nil {
+		return ""
+	}
+
+	// Use hdiutil info to get information about mounted disk images
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "hdiutil", "info")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	// Parse hdiutil info output to find our volume
+	// Format is blocks of info separated by "================================================"
+	// Each block has "image-path : /path/to/image" and mount points
+	lines := strings.Split(string(output), "\n")
+	var currentImagePath string
+	var foundOurImage bool
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Check for image path
+		if strings.HasPrefix(line, "image-path") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				currentImagePath = strings.TrimSpace(parts[1])
+				// Check if this is our volume (compare absolute paths)
+				absCurrentPath, _ := filepath.Abs(currentImagePath)
+				foundOurImage = absCurrentPath == absVolumePath
+			}
+		}
+
+		// If we found our image, look for mount point
+		// Note: hdiutil returns /private/tmp on macOS (since /tmp -> /private/tmp)
+		if foundOurImage && (strings.Contains(line, "/tmp/claude-env-") || strings.Contains(line, "/private/tmp/claude-env-")) {
+			// Line format: "/dev/diskXsY	Apple_APFS	/private/tmp/claude-env-xxx"
+			fields := strings.Fields(line)
+			for _, field := range fields {
+				if strings.HasPrefix(field, "/tmp/claude-env-") || strings.HasPrefix(field, "/private/tmp/claude-env-") {
+					return field
+				}
+			}
+		}
+
+		// Also check for legacy /Volumes mount point
+		if foundOurImage && strings.Contains(line, constants.MacOSMountPoint) {
+			fields := strings.Fields(line)
+			for _, field := range fields {
+				if field == constants.MacOSMountPoint {
+					return field
+				}
+			}
+		}
+
+		// Reset on separator
+		if strings.HasPrefix(line, "===") {
+			foundOurImage = false
+			currentImagePath = ""
+		}
+	}
+
+	return ""
 }
 
-// GetMountPoint returns the current mount point if mounted, empty string otherwise.
-func (m *MacOSVolumeManager) GetMountPoint() string {
-	return m.findMountPoint()
+// IsMounted returns true if the specified volume is currently mounted.
+func (m *MacOSVolumeManager) IsMounted(volumePath string) bool {
+	return m.findMountPointForVolume(volumePath) != ""
+}
+
+// GetMountPoint returns the mount point for the specified volume if mounted, empty string otherwise.
+func (m *MacOSVolumeManager) GetMountPoint(volumePath string) string {
+	return m.findMountPointForVolume(volumePath)
 }

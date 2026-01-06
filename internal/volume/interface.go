@@ -45,9 +45,9 @@ type VolumeManager interface {
 	// GetVolumePath returns the expected volume file path for the given base directory.
 	GetVolumePath(baseDir string) string
 
-	// IsMounted returns true if the volume is currently mounted.
-	IsMounted() bool
+	// IsMounted returns true if the specified volume is currently mounted.
+	IsMounted(volumePath string) bool
 
-	// GetMountPoint returns the current mount point if mounted, empty string otherwise.
-	GetMountPoint() string
+	// GetMountPoint returns the mount point for the specified volume if mounted, empty string otherwise.
+	GetMountPoint(volumePath string) string
 }
