@@ -385,13 +385,9 @@ func newStopCmd() *cobra.Command {
 func newLockCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "lock",
-		Short: "Unmount encrypted volume to secure credentials (restarts Docker)",
+		Short: "Unmount encrypted volume to secure credentials",
 		Long: `Unmounts the encrypted volume, securing all credentials and data.
-Use this when you're done working for the day.
-
-WARNING: This command restarts Docker Desktop to clear its cache.
-All running Docker containers will be stopped, not just claude-env.
-Make sure to save your work in other containers before locking.`,
+Use this when you're done working for the day.`,
 		RunE: runLock,
 	}
 }
@@ -409,16 +405,6 @@ func runLock(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Confirm with user since this restarts Docker
-	fmt.Println("This will restart Docker Desktop and stop all running containers.")
-	fmt.Print("Continue? [y/N] ")
-	var response string
-	fmt.Scanln(&response)
-	if response != "y" && response != "Y" {
-		fmt.Println("Cancelled.")
-		return nil
-	}
-
 	// Stop any running container first
 	dockerManager := docker.NewManager()
 	if dockerManager.IsRunning(docker.DefaultContainerName) {
@@ -428,50 +414,14 @@ func runLock(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Unmount the volume
+	// Unmount the volume (this also clears VM cache via drop_caches)
 	fmt.Println("Unmounting encrypted volume...")
 	if err := volumeManager.Unmount(""); err != nil {
 		return fmt.Errorf("failed to unmount volume: %w", err)
 	}
 
-	// Restart Docker Desktop to clear VirtioFS cache
-	// This ensures next 'start' will work correctly
-	fmt.Println("Refreshing Docker Desktop...")
-	if err := restartDockerDesktop(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-		fmt.Println("You may need to restart Docker Desktop manually before next start.")
-	}
-
 	fmt.Println("Volume locked. Your credentials are now secured.")
 	return nil
-}
-
-func restartDockerDesktop() error {
-	// Quit Docker Desktop
-	quitCmd := exec.Command("osascript", "-e", `quit app "Docker Desktop"`)
-	if err := quitCmd.Run(); err != nil {
-		return fmt.Errorf("failed to quit Docker Desktop: %w", err)
-	}
-
-	time.Sleep(2 * time.Second)
-
-	// Start Docker Desktop
-	startCmd := exec.Command("open", "-a", "Docker Desktop")
-	if err := startCmd.Run(); err != nil {
-		return fmt.Errorf("failed to start Docker Desktop: %w", err)
-	}
-
-	// Wait for Docker to be ready
-	fmt.Println("Waiting for Docker Desktop...")
-	for i := 0; i < 30; i++ {
-		checkCmd := exec.Command("docker", "info")
-		if err := checkCmd.Run(); err == nil {
-			return nil
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	return fmt.Errorf("Docker Desktop did not become ready in time")
 }
 
 func runStop(cmd *cobra.Command, args []string) error {

@@ -174,26 +174,23 @@ func (m *MacOSVolumeManager) Unmount(mountPoint string) error {
 		os.Remove(mountPoint)
 	}
 
-	// Give Docker Desktop a moment to register the unmount
-	time.Sleep(500 * time.Millisecond)
-
-	// Force Docker to refresh its VirtioFS cache by accessing /tmp
-	// This clears any stale cache entries for our mount point
-	m.refreshDockerCache()
+	// Clear the Linux VM's kernel cache to release VirtioFS file handles
+	// This may prevent "operation not permitted" errors on subsequent mounts
+	m.clearVMCache()
 
 	return nil
 }
 
-// refreshDockerCache forces Docker Desktop to refresh its VirtioFS cache
-// by running a minimal container that accesses /tmp
-func (m *MacOSVolumeManager) refreshDockerCache() {
+// clearVMCache clears the Linux VM's kernel cache to release VirtioFS file handles.
+// This drops dentries and inodes which may hold references to unmounted paths.
+func (m *MacOSVolumeManager) clearVMCache() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
-		"-v", "/tmp:/tmp-refresh:ro",
-		"alpine", "true")
-	_ = cmd.Run() // Ignore errors - this is best-effort cache refresh
+	// echo 3 drops page cache, dentries, and inodes
+	cmd := exec.CommandContext(ctx, "docker", "run", "--privileged", "--rm",
+		"alpine", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches")
+	_ = cmd.Run() // Ignore errors - this is best-effort cache clear
 }
 
 func (m *MacOSVolumeManager) Exists(volumePath string) bool {
