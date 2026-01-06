@@ -13,6 +13,7 @@ import (
 
 	"github.com/jeanhaley32/portable-claude-env/internal/config"
 	"github.com/jeanhaley32/portable-claude-env/internal/constants"
+	"github.com/jeanhaley32/portable-claude-env/internal/embedded"
 )
 
 // mountPointPrefix is the prefix for unique mount points in /tmp
@@ -210,6 +211,13 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string) error {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
+
+	// Write the bootstrap CLAUDE.md file for Claude Code context
+	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
+	if err := os.WriteFile(claudeMDPath, []byte(embedded.ClaudeMDTemplate), constants.FilePermissions); err != nil {
+		return fmt.Errorf("failed to write CLAUDE.md: %w", err)
+	}
+
 	return nil
 }
 
