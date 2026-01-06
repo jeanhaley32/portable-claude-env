@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -21,6 +23,62 @@ import (
 )
 
 var version = "0.2.0"
+
+// setupShutdownHandler registers signal handlers for graceful shutdown.
+// Returns a cancel function that should be deferred to cleanup the handler.
+// The cleanup function is ONLY called when a signal is received, not on normal exit.
+func setupShutdownHandler(cleanup func()) func() {
+	sigChan := make(chan os.Signal, 1)
+	done := make(chan struct{})
+
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+	go func() {
+		select {
+		case sig := <-sigChan:
+			fmt.Fprintf(os.Stderr, "\n[shutdown] Received signal: %v\n", sig)
+			fmt.Fprintf(os.Stderr, "[shutdown] Cleaning up and locking volume...\n")
+			cleanup()
+			os.Exit(1)
+		case <-done:
+			// Normal exit - handler cancelled, do nothing
+			return
+		}
+	}()
+
+	return func() {
+		signal.Stop(sigChan)
+		close(done)
+	}
+}
+
+// lockVolumeOnShutdown performs emergency volume lock on shutdown.
+func lockVolumeOnShutdown() {
+	volumeManager, err := volume.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[shutdown] Warning: could not create volume manager: %v\n", err)
+		return
+	}
+
+	// Stop container if running
+	dockerManager := docker.NewManager()
+	if dockerManager.IsRunning(docker.DefaultContainerName) {
+		fmt.Fprintf(os.Stderr, "[shutdown] Stopping container...\n")
+		if err := dockerManager.Stop(docker.DefaultContainerName); err != nil {
+			fmt.Fprintf(os.Stderr, "[shutdown] Warning: failed to stop container: %v\n", err)
+		}
+	}
+
+	// Unmount volume if mounted
+	if volumeManager.IsMounted() {
+		fmt.Fprintf(os.Stderr, "[shutdown] Locking volume...\n")
+		if err := volumeManager.Unmount(""); err != nil {
+			fmt.Fprintf(os.Stderr, "[shutdown] Warning: failed to unmount volume: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "[shutdown] Volume locked successfully.\n")
+		}
+	}
+}
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -269,6 +327,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Printf("Volume mounted at %s\n", mountPoint)
 	}
+
+	// Setup shutdown handler to lock volume on crash/termination
+	// This ensures the volume is secured if the process is killed unexpectedly
+	cancelShutdown := setupShutdownHandler(lockVolumeOnShutdown)
+	defer cancelShutdown()
 
 	// Refresh Docker's VirtioFS cache for the mount point
 	// This is necessary because Docker Desktop caches mount information
