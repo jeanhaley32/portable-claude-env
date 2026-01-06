@@ -1,16 +1,25 @@
 package volume
 
 import (
-	"bufio"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jeanhaley32/portable-claude-env/internal/config"
 	"github.com/jeanhaley32/portable-claude-env/internal/constants"
 )
+
+// mountPointPrefix is the prefix for unique mount points in /tmp
+const mountPointPrefix = "/tmp/claude-env-"
+
+// Timeout for volume operations (hdiutil can be slow for large volumes)
+const volumeOperationTimeout = 5 * time.Minute
 
 // MacOSVolumeManager implements VolumeManager using hdiutil for macOS.
 type MacOSVolumeManager struct{}
@@ -33,9 +42,12 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 		return fmt.Errorf("volume already exists at %s", volumePath)
 	}
 
-	// Create encrypted sparse image
+	// Create encrypted sparse image with timeout
 	// hdiutil create -size <size>g -encryption AES-256 -type SPARSE -fs APFS -volname ClaudeEnv -stdinpass <path>
-	cmd := exec.Command("hdiutil", "create",
+	ctx, cancel := context.WithTimeout(context.Background(), volumeOperationTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "hdiutil", "create",
 		"-size", fmt.Sprintf("%dg", cfg.SizeGB),
 		"-encryption", "AES-256",
 		"-type", "SPARSE",
@@ -48,6 +60,9 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("volume creation timed out after %v", volumeOperationTimeout)
+		}
 		return fmt.Errorf("failed to create encrypted volume: %w", err)
 	}
 
@@ -78,36 +93,50 @@ func (m *MacOSVolumeManager) Mount(volumePath, password string) (string, error) 
 		return mountPoint, nil
 	}
 
-	// Use a mount point under user's home directory to avoid Docker Desktop issues with /Volumes
-	homeDir, err := os.UserHomeDir()
+	// Generate a unique mount point in /tmp to avoid Docker Desktop VirtioFS caching issues
+	// Each session gets a fresh path that Docker has never seen before
+	mountPoint, err := m.generateUniqueMountPoint()
 	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
+		return "", fmt.Errorf("failed to generate mount point: %w", err)
 	}
-	mountPoint := filepath.Join(homeDir, ".claude-env", "mount")
 
-	// Ensure mount point directory exists
+	// Create the mount point directory
 	if err := os.MkdirAll(mountPoint, constants.DirPermissions); err != nil {
 		return "", fmt.Errorf("failed to create mount point directory: %w", err)
 	}
 
-	// Mount with password via stdin to custom mount point
-	cmd := exec.Command("hdiutil", "attach", "-stdinpass", "-mountpoint", mountPoint, volumePath)
+	// Mount with password via stdin to the unique mount point
+	ctx, cancel := context.WithTimeout(context.Background(), volumeOperationTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "hdiutil", "attach", "-stdinpass", "-mountpoint", mountPoint, volumePath)
 	cmd.Stdin = strings.NewReader(password)
 
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		// Clean up the directory we created
+		os.Remove(mountPoint)
+
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("volume mount timed out after %v", volumeOperationTimeout)
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return "", fmt.Errorf("failed to mount volume: %s", string(exitErr.Stderr))
 		}
-		return "", fmt.Errorf("failed to mount volume: %w", err)
-	}
-
-	// Verify mount succeeded by checking output contains our mount point
-	if !strings.Contains(string(output), mountPoint) {
-		return "", fmt.Errorf("volume mounted but mount point not confirmed")
+		return "", fmt.Errorf("failed to mount volume: %w: %s", err, string(output))
 	}
 
 	return mountPoint, nil
+}
+
+// generateUniqueMountPoint creates a unique path in /tmp for mounting
+func (m *MacOSVolumeManager) generateUniqueMountPoint() (string, error) {
+	// Generate 8 random bytes for a 16-character hex string
+	bytes := make([]byte, 8)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("failed to generate random bytes: %w", err)
+	}
+	return mountPointPrefix + hex.EncodeToString(bytes), nil
 }
 
 func (m *MacOSVolumeManager) Unmount(mountPoint string) error {
@@ -118,16 +147,53 @@ func (m *MacOSVolumeManager) Unmount(mountPoint string) error {
 		}
 	}
 
-	cmd := exec.Command("hdiutil", "detach", mountPoint)
+	// Use shorter timeout for unmount operations
+	unmountTimeout := 30 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), unmountTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "hdiutil", "detach", mountPoint)
 	if err := cmd.Run(); err != nil {
-		// Try force detach
-		cmd = exec.Command("hdiutil", "detach", "-force", mountPoint)
+		// Try force detach with fresh context
+		forceCtx, forceCancel := context.WithTimeout(context.Background(), unmountTimeout)
+		defer forceCancel()
+
+		cmd = exec.CommandContext(forceCtx, "hdiutil", "detach", "-force", mountPoint)
 		if err := cmd.Run(); err != nil {
+			if forceCtx.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("volume unmount timed out after %v (even with force)", unmountTimeout)
+			}
 			return fmt.Errorf("failed to unmount volume (even with force): %w", err)
 		}
 	}
 
+	// Clean up our mount point directory in /tmp
+	// Only remove if it's one of our managed mount points (safety check)
+	if strings.HasPrefix(mountPoint, mountPointPrefix) {
+		os.Remove(mountPoint)
+	}
+
+	// Give Docker Desktop a moment to register the unmount
+	time.Sleep(500 * time.Millisecond)
+
+	// Force Docker to refresh its VirtioFS cache by accessing /tmp
+	// This clears any stale cache entries for our mount point
+	m.refreshDockerCache()
+
 	return nil
+}
+
+// refreshDockerCache forces Docker Desktop to refresh its VirtioFS cache
+// by running a minimal container that accesses /tmp
+func (m *MacOSVolumeManager) refreshDockerCache() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
+		"-v", "/tmp:/tmp-refresh:ro",
+		"alpine", "true")
+	_ = cmd.Run() // Ignore errors - this is best-effort cache refresh
 }
 
 func (m *MacOSVolumeManager) Exists(volumePath string) bool {
@@ -150,48 +216,28 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string) error {
 	return nil
 }
 
-// parseMountPoint extracts the mount point from hdiutil attach output.
-func (m *MacOSVolumeManager) parseMountPoint(output string) string {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Look for /Volumes/ in the line
-		if idx := strings.Index(line, "/Volumes/"); idx != -1 {
-			return strings.TrimSpace(line[idx:])
-		}
-	}
-	return ""
-}
-
 // findMountPoint checks if ClaudeEnv volume is currently mounted.
 func (m *MacOSVolumeManager) findMountPoint() string {
-	// Check new mount point under home directory first (preferred for Docker compatibility)
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		homeMountPoint := filepath.Join(homeDir, ".claude-env", "mount")
-		if info, err := os.Stat(homeMountPoint); err == nil && info.IsDir() {
-			// Verify it's actually a mount by checking for content
-			entries, err := os.ReadDir(homeMountPoint)
-			if err == nil && len(entries) > 0 {
-				return homeMountPoint
-			}
-		}
-	}
-
-	// Fall back to standard /Volumes mount point (legacy)
-	if _, err := os.Stat(constants.MacOSMountPoint); err == nil {
-		return constants.MacOSMountPoint
-	}
-
-	// Check for numbered variants (e.g., /Volumes/ClaudeEnv 1)
-	entries, err := os.ReadDir("/Volumes")
+	// Check for our unique mount points in /tmp
+	entries, err := os.ReadDir("/tmp")
 	if err != nil {
 		return ""
 	}
 
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), constants.MacOSVolumeName) {
-			return filepath.Join("/Volumes", entry.Name())
+		if strings.HasPrefix(entry.Name(), "claude-env-") && entry.IsDir() {
+			mountPoint := filepath.Join("/tmp", entry.Name())
+			// Verify it's actually mounted by checking for content
+			contents, err := os.ReadDir(mountPoint)
+			if err == nil && len(contents) > 0 {
+				return mountPoint
+			}
 		}
+	}
+
+	// Also check legacy /Volumes mount point for backwards compatibility
+	if _, err := os.Stat(constants.MacOSMountPoint); err == nil {
+		return constants.MacOSMountPoint
 	}
 
 	return ""

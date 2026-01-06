@@ -41,7 +41,16 @@ const (
 // Security-related constants
 const (
 	// MinPasswordLength is the minimum required password length.
-	MinPasswordLength = 8
+	// NIST SP 800-63B recommends minimum 8, but 12+ is better for encryption keys.
+	MinPasswordLength = 12
+)
+
+// Volume size limits
+const (
+	// MinVolumeSizeGB is the minimum volume size in gigabytes.
+	MinVolumeSizeGB = 1
+	// MaxVolumeSizeGB is the maximum volume size in gigabytes.
+	MaxVolumeSizeGB = 100
 )
 
 // File permissions

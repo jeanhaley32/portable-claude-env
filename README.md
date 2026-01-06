@@ -77,21 +77,43 @@ claude   # Start Claude Code CLI
 
 Your credentials are stored in the encrypted volume and persist across sessions.
 
-### 5. Exit
+### 5. Exit and Re-enter
 
-Simply type `exit` to leave the container. The environment automatically:
-- Stops the container
-- Unmounts the encrypted volume (locking your credentials)
+Type `exit` to leave the container. The container stops but the **volume remains mounted** for fast re-entry:
 
-You can also manually stop with `claude-env stop` if needed.
+```bash
+exit                    # Leave container
+./claude-env start      # Quick re-entry (no password needed)
+```
+
+### 6. Lock When Done
+
+When you're finished working for the day, lock your credentials:
+
+```bash
+./claude-env lock
+```
+
+This unmounts the encrypted volume, securing your credentials. The next `start` will require your password again.
+
+> **Warning:** `lock` restarts Docker Desktop to clear its cache. This will **stop all running Docker containers**, not just the claude-env container. Make sure to save your work in other containers before locking.
+
+#### Why does `lock` restart Docker?
+
+Docker Desktop on macOS uses VirtioFS for file sharing between the host and containers. VirtioFS caches information about mounted volumes, including encrypted APFS volumes. When an encrypted volume is unmounted, VirtioFS retains stale cache entries that cause subsequent mounts to fail with "operation not permitted" or "file exists" errors.
+
+The only reliable way to clear VirtioFS's cache is to restart Docker Desktop. This is a known limitation of Docker Desktop's file sharing implementation with dynamically mounted encrypted volumes.
+
+**Trade-off:** We chose to keep the volume mounted between `start`/`exit` cycles for fast re-entry, and only restart Docker when explicitly locking. This minimizes disruption while still providing full security when you're done working.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `bootstrap` | Create new encrypted volume |
-| `start` | Mount volume, start container, enter shell |
-| `stop` | Stop container, unmount volume (manual) |
+| `start` | Mount volume (if needed), start container, enter shell |
+| `stop` | Stop container (keeps volume mounted) |
+| `lock` | Unmount volume and secure credentials (**restarts Docker**) |
 | `status` | Show current environment status |
 | `build-image` | Build Docker image (automatic on first start) |
 | `version` | Show version information |
@@ -102,13 +124,15 @@ You can also manually stop with `claude-env stop` if needed.
 
 ```
 claude-env.sparseimage (encrypted, AES-256)
-└── ~/.claude-env/mount (when mounted)
+└── /tmp/claude-env-<id>/ (when mounted)
     ├── auth/           # API keys
     ├── config/         # Settings
     ├── home/           # User home directory (Claude credentials live here)
     ├── repos/          # Per-project shadow documentation
     └── ...
 ```
+
+The volume mounts to a unique path in `/tmp` for Docker compatibility.
 
 ### Container Architecture
 
@@ -146,10 +170,12 @@ The symlink is created inside the container and is automatically gitignored.
 | Aspect | Protection |
 |--------|------------|
 | Credentials at rest | AES-256 encrypted volume |
-| Credentials in memory | Only decrypted while container runs |
+| Credentials in memory | Accessible while volume is mounted |
 | API keys | Never stored in Docker image or git |
-| Volume password | Never stored, prompted each session |
+| Volume password | Never stored, required to unlock |
 | Container isolation | Docker provides process isolation |
+
+**Important:** After `exit`, the volume remains mounted for fast re-entry. Run `claude-env lock` to unmount and fully secure your credentials.
 
 ### What's Protected
 
@@ -228,6 +254,15 @@ Rebuild the Docker image:
 ```bash
 claude-env build-image --force
 ```
+
+### "operation not permitted" or "file exists" on start
+
+This can happen if Docker Desktop's cache is stale after a `lock`. Run `lock` again to restart Docker Desktop:
+```bash
+./claude-env lock
+```
+
+If the volume is already unmounted, restart Docker Desktop manually.
 
 ## Development
 

@@ -1,13 +1,18 @@
 package state
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jeanhaley32/portable-claude-env/internal/constants"
 )
+
+// Timeout for state detection commands
+const stateCheckTimeout = 10 * time.Second
 
 // EnvironmentState represents the current state of the claude-env environment.
 type EnvironmentState struct {
@@ -68,7 +73,19 @@ func (d *Detector) Detect() *EnvironmentState {
 
 // checkVolumeMounted checks if the ClaudeEnv volume is mounted.
 func (d *Detector) checkVolumeMounted() (string, bool) {
-	// Check common mount point
+	// Check new mount point under home directory first (preferred for Docker compatibility)
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		homeMountPoint := filepath.Join(homeDir, ".claude-env", "mount")
+		if info, err := os.Stat(homeMountPoint); err == nil && info.IsDir() {
+			// Verify it's actually a mount by checking for content
+			entries, err := os.ReadDir(homeMountPoint)
+			if err == nil && len(entries) > 0 {
+				return homeMountPoint, true
+			}
+		}
+	}
+
+	// Fall back to standard /Volumes mount point (legacy)
 	if _, err := os.Stat(constants.MacOSMountPoint); err == nil {
 		return constants.MacOSMountPoint, true
 	}
@@ -90,8 +107,11 @@ func (d *Detector) checkVolumeMounted() (string, bool) {
 
 // checkContainer checks if the container exists and is running.
 func (d *Detector) checkContainer() (exists bool, running bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), stateCheckTimeout)
+	defer cancel()
+
 	// Check if container exists
-	cmd := exec.Command("docker", "ps", "-a", "-q", "-f", "name="+d.containerName)
+	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "-q", "-f", "name=^"+d.containerName+"$")
 	output, err := cmd.Output()
 	if err != nil || len(strings.TrimSpace(string(output))) == 0 {
 		return false, false
@@ -100,7 +120,7 @@ func (d *Detector) checkContainer() (exists bool, running bool) {
 	exists = true
 
 	// Check if container is running
-	cmd = exec.Command("docker", "inspect", "-f", "{{.State.Running}}", d.containerName)
+	cmd = exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", d.containerName)
 	output, err = cmd.Output()
 	if err != nil {
 		return exists, false
@@ -136,7 +156,10 @@ func (d *Detector) checkSymlink() (exists bool, broken bool) {
 
 // CheckDockerRunning verifies Docker daemon is running.
 func CheckDockerRunning() error {
-	cmd := exec.Command("docker", "info")
+	ctx, cancel := context.WithTimeout(context.Background(), stateCheckTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "info")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	return cmd.Run()
@@ -144,7 +167,10 @@ func CheckDockerRunning() error {
 
 // CheckImageExists verifies a Docker image exists locally.
 func CheckImageExists(imageName string) bool {
-	cmd := exec.Command("docker", "image", "inspect", imageName)
+	ctx, cancel := context.WithTimeout(context.Background(), stateCheckTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", imageName)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	return cmd.Run() == nil
