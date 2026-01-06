@@ -205,8 +205,11 @@ func (m *MacOSVolumeManager) GetVolumePath(baseDir string) string {
 
 // createDirectoryStructure creates the required directories inside the mounted volume.
 func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string) error {
+	fmt.Fprintf(os.Stderr, "[bootstrap] Creating directory structure in %s\n", mountPoint)
+
 	for _, dir := range config.VolumeStructure {
 		path := filepath.Join(mountPoint, dir)
+		fmt.Fprintf(os.Stderr, "[bootstrap] Creating directory: %s\n", path)
 		if err := os.MkdirAll(path, constants.DirPermissions); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
@@ -214,10 +217,12 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string) error {
 
 	// Write the bootstrap CLAUDE.md file for Claude Code context
 	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
+	fmt.Fprintf(os.Stderr, "[bootstrap] Writing CLAUDE.md to %s\n", claudeMDPath)
 	if err := os.WriteFile(claudeMDPath, []byte(embedded.ClaudeMDTemplate), constants.FilePermissions); err != nil {
 		return fmt.Errorf("failed to write CLAUDE.md: %w", err)
 	}
 
+	fmt.Fprintf(os.Stderr, "[bootstrap] Directory structure created successfully\n")
 	return nil
 }
 
