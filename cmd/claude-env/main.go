@@ -20,7 +20,7 @@ import (
 	"github.com/jeanhaley32/portable-claude-env/internal/volume"
 )
 
-var version = "0.1.0"
+var version = "0.2.0"
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -33,6 +33,7 @@ func main() {
 		newBootstrapCmd(),
 		newStartCmd(),
 		newStopCmd(),
+		newUnlockCmd(),
 		newLockCmd(),
 		newStatusCmd(),
 		newBuildImageCmd(),
@@ -391,14 +392,108 @@ func newStopCmd() *cobra.Command {
 	}
 }
 
+func newUnlockCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "unlock",
+		Short: "Mount encrypted volume without starting container",
+		Long: `Mounts the encrypted volume to the host filesystem without starting Docker.
+This allows injecting files or accessing the volume from external processes.
+
+Output is in KEY=VALUE format for easy parsing:
+  MOUNT_POINT=/tmp/claude-env-abc123
+  STATUS=mounted
+
+Password can be provided via:
+  - Interactive prompt (default)
+  - --password-stdin flag: echo $PASS | claude-env unlock --password-stdin
+  - CLAUDE_ENV_PASSWORD environment variable`,
+		RunE: runUnlock,
+	}
+
+	cmd.Flags().String("volume", "", "Path to encrypted volume (auto-detected if not specified)")
+	cmd.Flags().Bool("password-stdin", false, "Read password from stdin instead of terminal prompt")
+
+	return cmd
+}
+
+func runUnlock(cmd *cobra.Command, args []string) error {
+	// Check platform
+	if !platform.IsMacOS() {
+		return fmt.Errorf("unlock currently only supports macOS")
+	}
+
+	volumePathFlag, err := cmd.Flags().GetString("volume")
+	if err != nil {
+		return fmt.Errorf("invalid volume flag: %w", err)
+	}
+	passwordStdin, err := cmd.Flags().GetBool("password-stdin")
+	if err != nil {
+		return fmt.Errorf("invalid password-stdin flag: %w", err)
+	}
+
+	// Create volume manager
+	volumeManager, err := volume.New()
+	if err != nil {
+		return err
+	}
+
+	// Find volume path
+	volumePath := volumePathFlag
+	if volumePath == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+		volumePath = volumeManager.GetVolumePath(cwd)
+		if !volumeManager.Exists(volumePath) {
+			return fmt.Errorf("volume not found at %s. Run 'claude-env bootstrap' first or specify --volume", volumePath)
+		}
+	}
+
+	// Check if already mounted
+	if existingMount := volumeManager.GetMountPoint(); existingMount != "" {
+		// Output parsable values
+		fmt.Printf("MOUNT_POINT=%s\n", existingMount)
+		fmt.Printf("STATUS=already_mounted\n")
+		fmt.Printf("VOLUME_PATH=%s\n", volumePath)
+		return nil
+	}
+
+	// Get password from multiple sources
+	password, err := terminal.ReadPasswordMultiSource(passwordStdin, "Enter volume password: ")
+	if err != nil {
+		return fmt.Errorf("password error: %w", err)
+	}
+
+	// Mount volume
+	fmt.Fprintf(os.Stderr, "Mounting encrypted volume...\n")
+	mountPoint, err := volumeManager.Mount(volumePath, password)
+	if err != nil {
+		return fmt.Errorf("failed to mount volume: %w", err)
+	}
+
+	// Output parsable values to stdout
+	fmt.Printf("MOUNT_POINT=%s\n", mountPoint)
+	fmt.Printf("STATUS=mounted\n")
+	fmt.Printf("VOLUME_PATH=%s\n", volumePath)
+
+	fmt.Fprintf(os.Stderr, "Volume unlocked. Run 'claude-env lock' to secure.\n")
+	return nil
+}
+
 func newLockCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "lock",
 		Short: "Unmount encrypted volume to secure credentials",
 		Long: `Unmounts the encrypted volume, securing all credentials and data.
-Use this when you're done working for the day.`,
+Use this when you're done working for the day.
+
+Output is in KEY=VALUE format for easy parsing:
+  STATUS=locked`,
 		RunE: runLock,
 	}
+
+	return cmd
 }
 
 func runLock(cmd *cobra.Command, args []string) error {
@@ -410,26 +505,30 @@ func runLock(cmd *cobra.Command, args []string) error {
 
 	// Check if volume is mounted
 	if !volumeManager.IsMounted() {
-		fmt.Println("Volume is not mounted. Nothing to lock.")
+		fmt.Printf("STATUS=not_mounted\n")
+		fmt.Fprintf(os.Stderr, "Volume is not mounted. Nothing to lock.\n")
 		return nil
 	}
 
 	// Stop any running container first
 	dockerManager := docker.NewManager()
 	if dockerManager.IsRunning(docker.DefaultContainerName) {
-		fmt.Println("Stopping running container...")
+		fmt.Fprintf(os.Stderr, "Stopping running container...\n")
 		if err := dockerManager.Stop(docker.DefaultContainerName); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to stop container: %v\n", err)
 		}
 	}
 
 	// Unmount the volume (this also clears VM cache via drop_caches)
-	fmt.Println("Unmounting encrypted volume...")
+	fmt.Fprintf(os.Stderr, "Unmounting encrypted volume...\n")
 	if err := volumeManager.Unmount(""); err != nil {
 		return fmt.Errorf("failed to unmount volume: %w", err)
 	}
 
-	fmt.Println("Volume locked. Your credentials are now secured.")
+	// Output parsable values to stdout
+	fmt.Printf("STATUS=locked\n")
+
+	fmt.Fprintf(os.Stderr, "Volume locked. Your credentials are now secured.\n")
 	return nil
 }
 

@@ -90,14 +90,62 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 		fmt.Fprintf(os.Stderr, "[bootstrap] Verified home/.claude exists with %d entries\n", len(entries))
 	}
 
-	// Sync filesystem before unmount to ensure data is persisted
-	fmt.Fprintf(os.Stderr, "[bootstrap] Syncing filesystem...\n")
-	syncCmd := exec.Command("sync")
-	_ = syncCmd.Run()
+	// Sync filesystem before unmount
+	// 1. Sync the specific file we care about using fsync
+	fmt.Fprintf(os.Stderr, "[bootstrap] Syncing CLAUDE.md to disk...\n")
+	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
+	if f, err := os.OpenFile(claudeMDPath, os.O_RDONLY, 0); err == nil {
+		if err := f.Sync(); err != nil {
+			fmt.Fprintf(os.Stderr, "[bootstrap] Warning: fsync failed: %v\n", err)
+		}
+		f.Close()
+	}
+
+	// 2. Sync the parent directory
+	if d, err := os.Open(filepath.Join(mountPoint, "home", ".claude")); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+
+	// 3. System-wide sync
+	fmt.Fprintf(os.Stderr, "[bootstrap] Running system sync...\n")
+	syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer syncCancel()
+	syncCmd := exec.CommandContext(syncCtx, "/bin/sync")
+	if err := syncCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "[bootstrap] Warning: sync failed: %v\n", err)
+	}
+
+	// Additional delay to ensure sparse image is fully written
+	fmt.Fprintf(os.Stderr, "[bootstrap] Waiting for sparse image flush...\n")
+	time.Sleep(2 * time.Second)
 
 	// Unmount the volume
 	if err := m.Unmount(mountPoint); err != nil {
 		return fmt.Errorf("failed to unmount volume after setup: %w", err)
+	}
+
+	// Wait for unmount to fully complete
+	time.Sleep(1 * time.Second)
+
+	// Remount and verify data persisted to the sparse image
+	fmt.Fprintf(os.Stderr, "[bootstrap] Verifying data persistence by remounting...\n")
+	verifyMountPoint, err := m.Mount(volumePath, cfg.Password)
+	if err != nil {
+		return fmt.Errorf("failed to remount volume for verification: %w", err)
+	}
+
+	// Check that CLAUDE.md exists after remount
+	claudeMDVerifyPath := filepath.Join(verifyMountPoint, "home", ".claude", "CLAUDE.md")
+	if _, err := os.Stat(claudeMDVerifyPath); err != nil {
+		_ = m.Unmount(verifyMountPoint)
+		return fmt.Errorf("verification failed - CLAUDE.md not persisted to sparse image: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "[bootstrap] Verified CLAUDE.md persisted successfully\n")
+
+	// Final unmount
+	if err := m.Unmount(verifyMountPoint); err != nil {
+		return fmt.Errorf("failed to unmount volume after verification: %w", err)
 	}
 
 	return nil
@@ -180,6 +228,24 @@ func (m *MacOSVolumeManager) Unmount(mountPoint string) error {
 	// Use shorter timeout for unmount operations
 	unmountTimeout := 30 * time.Second
 
+	// First, try diskutil unmount which forces a sync before unmounting
+	fmt.Fprintf(os.Stderr, "[unmount] Syncing and unmounting via diskutil...\n")
+	diskutilCtx, diskutilCancel := context.WithTimeout(context.Background(), unmountTimeout)
+	defer diskutilCancel()
+
+	diskutilCmd := exec.CommandContext(diskutilCtx, "diskutil", "unmount", mountPoint)
+	if err := diskutilCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "[unmount] diskutil unmount failed (will try hdiutil): %v\n", err)
+	} else {
+		// diskutil unmount succeeded, clean up mount point directory
+		if strings.HasPrefix(mountPoint, mountPointPrefix) {
+			os.Remove(mountPoint)
+		}
+		m.clearVMCache()
+		return nil
+	}
+
+	// Fall back to hdiutil detach
 	ctx, cancel := context.WithTimeout(context.Background(), unmountTimeout)
 	defer cancel()
 
