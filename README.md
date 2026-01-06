@@ -96,15 +96,6 @@ When you're finished working for the day, lock your credentials:
 
 This unmounts the encrypted volume, securing your credentials. The next `start` will require your password again.
 
-> **Warning:** `lock` restarts Docker Desktop to clear its cache. This will **stop all running Docker containers**, not just the claude-env container. Make sure to save your work in other containers before locking.
-
-#### Why does `lock` restart Docker?
-
-Docker Desktop on macOS uses VirtioFS for file sharing between the host and containers. VirtioFS caches information about mounted volumes, including encrypted APFS volumes. When an encrypted volume is unmounted, VirtioFS retains stale cache entries that cause subsequent mounts to fail with "operation not permitted" or "file exists" errors.
-
-The only reliable way to clear VirtioFS's cache is to restart Docker Desktop. This is a known limitation of Docker Desktop's file sharing implementation with dynamically mounted encrypted volumes.
-
-**Trade-off:** We chose to keep the volume mounted between `start`/`exit` cycles for fast re-entry, and only restart Docker when explicitly locking. This minimizes disruption while still providing full security when you're done working.
 
 ## Commands
 
@@ -113,7 +104,7 @@ The only reliable way to clear VirtioFS's cache is to restart Docker Desktop. Th
 | `bootstrap` | Create new encrypted volume |
 | `start` | Mount volume (if needed), start container, enter shell |
 | `stop` | Stop container (keeps volume mounted) |
-| `lock` | Unmount volume and secure credentials (**restarts Docker**) |
+| `lock` | Unmount volume and secure credentials |
 | `status` | Show current environment status |
 | `build-image` | Build Docker image (automatic on first start) |
 | `version` | Show version information |
