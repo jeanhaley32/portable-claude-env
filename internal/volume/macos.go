@@ -74,7 +74,7 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 	}
 
 	// Create directory structure
-	if err := m.createDirectoryStructure(mountPoint); err != nil {
+	if err := m.createDirectoryStructure(mountPoint, cfg.ContextFiles); err != nil {
 		// Try to unmount even if directory creation fails
 		_ = m.Unmount(mountPoint)
 		return fmt.Errorf("failed to create directory structure: %w", err)
@@ -300,7 +300,7 @@ func (m *MacOSVolumeManager) GetVolumePath(baseDir string) string {
 }
 
 // createDirectoryStructure creates the required directories inside the mounted volume.
-func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string) error {
+func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, contextFiles []string) error {
 	fmt.Fprintf(os.Stderr, "[bootstrap] Creating directory structure in %s\n", mountPoint)
 
 	for _, dir := range config.VolumeStructure {
@@ -312,9 +312,19 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string) error {
 	}
 
 	// Write the bootstrap CLAUDE.md file for Claude Code context
+	// Start with base template and append any context files
 	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
 	fmt.Fprintf(os.Stderr, "[bootstrap] Writing CLAUDE.md to %s\n", claudeMDPath)
-	if err := os.WriteFile(claudeMDPath, []byte(embedded.ClaudeMDTemplate), constants.FilePermissions); err != nil {
+	claudeMDContent := embedded.ClaudeMDTemplate
+	for _, ctxFile := range contextFiles {
+		if extraContent, err := os.ReadFile(ctxFile); err == nil {
+			fmt.Fprintf(os.Stderr, "[bootstrap] Appending context from %s\n", ctxFile)
+			claudeMDContent = claudeMDContent + "\n" + string(extraContent)
+		} else {
+			return fmt.Errorf("failed to read context file %s: %w", ctxFile, err)
+		}
+	}
+	if err := os.WriteFile(claudeMDPath, []byte(claudeMDContent), constants.FilePermissions); err != nil {
 		return fmt.Errorf("failed to write CLAUDE.md: %w", err)
 	}
 

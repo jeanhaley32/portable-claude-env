@@ -8,9 +8,10 @@ import (
 
 // BootstrapConfig holds configuration for creating a new encrypted volume.
 type BootstrapConfig struct {
-	Path     string
-	SizeGB   int
-	Password string
+	Path         string
+	SizeGB       int
+	Password     string
+	ContextFiles []string // Markdown files to extend Claude context
 }
 
 // Validate checks that the bootstrap configuration is valid.

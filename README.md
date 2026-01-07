@@ -302,7 +302,25 @@ go build -o claude-env ./cmd/claude-env
 cp Dockerfile internal/embedded/Dockerfile
 go build -o claude-env ./cmd/claude-env
 claude-env build-image --force
+
 ```
+
+### Extending Claude Context
+
+Use the `--context` flag during bootstrap to specify markdown files that extend Claude's base context:
+
+```bash
+# Single context file
+claude-env bootstrap --context ./project-rules.md
+
+# Multiple context files
+claude-env bootstrap --context ./coding-standards.md --context ./api-guidelines.md
+
+# Or comma-separated
+claude-env bootstrap --context ./rules.md,./guidelines.md
+```
+
+The context is generated **once at bootstrap** and becomes part of the encrypted volume. After bootstrap, you or the agent can manually edit `~/.claude/CLAUDE.md` inside the container to modify the context.
 
 ## License
 

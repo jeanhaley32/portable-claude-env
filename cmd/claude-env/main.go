@@ -117,6 +117,7 @@ func newBootstrapCmd() *cobra.Command {
 	cmd.Flags().Int("size", 2, "Volume size in GB")
 	cmd.Flags().String("api-key", "", "Claude API key (optional, can be added later)")
 	cmd.Flags().String("path", ".", "Path for encrypted volume")
+	cmd.Flags().StringSlice("context", []string{}, "Markdown files to extend Claude context (can be specified multiple times)")
 
 	return cmd
 }
@@ -138,6 +139,21 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	basePath, err := cmd.Flags().GetString("path")
 	if err != nil {
 		return fmt.Errorf("invalid path flag: %w", err)
+	}
+	contextFiles, err := cmd.Flags().GetStringSlice("context")
+	if err != nil {
+		return fmt.Errorf("invalid context flag: %w", err)
+	}
+
+	// Convert context files to absolute paths
+	for i, ctxFile := range contextFiles {
+		if !filepath.IsAbs(ctxFile) {
+			absCtxPath, err := filepath.Abs(ctxFile)
+			if err != nil {
+				return fmt.Errorf("invalid context file path %s: %w", ctxFile, err)
+			}
+			contextFiles[i] = absCtxPath
+		}
 	}
 
 	// Convert to absolute path
@@ -172,9 +188,10 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 
 	// Bootstrap the volume
 	cfg := volume.BootstrapConfig{
-		Path:     absPath,
-		SizeGB:   size,
-		Password: password,
+		Path:         absPath,
+		SizeGB:       size,
+		Password:     password,
+		ContextFiles: contextFiles,
 	}
 
 	if err := volumeManager.Bootstrap(cfg); err != nil {
