@@ -24,7 +24,6 @@ uninstall:
 
 ## Build Docker image
 docker: build
-	@cp Dockerfile internal/embedded/Dockerfile
 	./$(BINARY_NAME) build-image --force
 
 ## Run tests

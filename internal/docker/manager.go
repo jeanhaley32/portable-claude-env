@@ -162,7 +162,7 @@ func (m *Manager) Exec(containerName string) error {
 		containerName = DefaultContainerName
 	}
 
-	cmd := exec.Command("docker", "exec", "-it", containerName, "/bin/bash")
+	cmd := exec.Command("docker", "exec", "-it", containerName, "/bin/zsh")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

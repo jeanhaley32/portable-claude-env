@@ -60,6 +60,23 @@ WORKDIR /workspace
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended && \
     sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="agnoster"/' ~/.zshrc
 
+# Copy Oh My Zsh to /etc/skel for use with custom HOME directories
+USER root
+RUN cp -r /home/claude/.oh-my-zsh /etc/skel/.oh-my-zsh && \
+    cp /home/claude/.zshrc /etc/skel/.zshrc
+
+# Add init script to set up Oh My Zsh in $HOME if missing
+RUN cat > /etc/zsh/zshenv << 'INITSCRIPT'
+# Initialize Oh My Zsh in $HOME if not present
+if [ -n "$HOME" ] && [ ! -d "$HOME/.oh-my-zsh" ]; then
+    mkdir -p "$HOME"
+    cp -r /etc/skel/.oh-my-zsh "$HOME/.oh-my-zsh" 2>/dev/null || true
+    cp /etc/skel/.zshrc "$HOME/.zshrc" 2>/dev/null || true
+fi
+INITSCRIPT
+
+USER claude
+
 # Environment variables
 ENV CLAUDE_ENV_PATH=/claude-env
 ENV ANTHROPIC_API_KEY_FILE=/claude-env/auth/api-key
