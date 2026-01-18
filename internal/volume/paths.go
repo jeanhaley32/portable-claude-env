@@ -66,16 +66,6 @@ func (p *PathResolver) ResolveVolumePath(explicitPath, cwd string) (volumePath s
 	return globalPath, err == nil
 }
 
-// EnsureGlobalVolumeDir creates the global volume directory if it doesn't exist.
-// Returns: ~/.capsule/volumes
-func (p *PathResolver) EnsureGlobalVolumeDir() (string, error) {
-	dir := p.GetGlobalVolumeDir()
-	if err := os.MkdirAll(dir, constants.DirPermissions); err != nil {
-		return "", fmt.Errorf("failed to create global volume directory: %w", err)
-	}
-	return dir, nil
-}
-
 // VolumeNotFoundError provides a helpful error message showing both locations checked.
 type VolumeNotFoundError struct {
 	LocalPath  string

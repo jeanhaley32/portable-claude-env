@@ -153,37 +153,6 @@ func TestPathResolver_ResolveVolumePathStrict_NotFound(t *testing.T) {
 	}
 }
 
-func TestPathResolver_EnsureGlobalVolumeDir(t *testing.T) {
-	// Use a temp home directory to avoid modifying real home
-	tmpHome, err := os.MkdirTemp("", "capsule-home-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpHome)
-
-	// Create a resolver with custom home
-	resolver := &PathResolver{homeDir: tmpHome}
-
-	dir, err := resolver.EnsureGlobalVolumeDir()
-	if err != nil {
-		t.Fatalf("EnsureGlobalVolumeDir() error = %v", err)
-	}
-
-	expected := filepath.Join(tmpHome, constants.CapsuleConfigDir, constants.VolumesSubdir)
-	if dir != expected {
-		t.Errorf("EnsureGlobalVolumeDir() = %v, want %v", dir, expected)
-	}
-
-	// Verify directory exists
-	info, err := os.Stat(dir)
-	if err != nil {
-		t.Errorf("Directory was not created: %v", err)
-	}
-	if !info.IsDir() {
-		t.Errorf("Path is not a directory: %v", dir)
-	}
-}
-
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
 }
