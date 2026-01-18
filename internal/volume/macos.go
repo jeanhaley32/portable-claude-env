@@ -14,6 +14,7 @@ import (
 	"github.com/jeanhaley32/claude-capsule/internal/config"
 	"github.com/jeanhaley32/claude-capsule/internal/constants"
 	"github.com/jeanhaley32/claude-capsule/internal/embedded"
+	"github.com/jeanhaley32/claude-capsule/internal/terminal"
 )
 
 // mountPointPrefix is the prefix for unique mount points in /tmp
@@ -57,7 +58,7 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 		"-stdinpass",
 		volumePath,
 	)
-	cmd.Stdin = strings.NewReader(cfg.Password)
+	cmd.Stdin = cfg.Password.Reader()
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
@@ -80,69 +81,15 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 		return fmt.Errorf("failed to create directory structure: %w", err)
 	}
 
-	// Verify the directory structure was created by reading it back
-	homeClaudeDir := filepath.Join(mountPoint, "home", ".claude")
-	if _, err := os.ReadDir(homeClaudeDir); err != nil {
-		_ = m.Unmount(mountPoint)
-		return fmt.Errorf("verification failed - cannot read home/.claude: %w", err)
-	}
-
-	// Sync filesystem before unmount
-	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
-	if f, err := os.OpenFile(claudeMDPath, os.O_RDONLY, 0); err == nil {
-		if err := f.Sync(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: fsync failed: %v\n", err)
-		}
-		f.Close()
-	}
-
-	// Sync the parent directory
-	if d, err := os.Open(filepath.Join(mountPoint, "home", ".claude")); err == nil {
-		_ = d.Sync()
-		d.Close()
-	}
-
-	// System-wide sync
-	syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer syncCancel()
-	syncCmd := exec.CommandContext(syncCtx, "/bin/sync")
-	if err := syncCmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: sync failed: %v\n", err)
-	}
-
-	// Additional delay to ensure sparse image is fully written
-	time.Sleep(2 * time.Second)
-
-	// Unmount the volume
+	// Unmount the volume - APFS handles durability, unmount syncs data
 	if err := m.Unmount(mountPoint); err != nil {
 		return fmt.Errorf("failed to unmount volume after setup: %w", err)
-	}
-
-	// Wait for unmount to fully complete
-	time.Sleep(1 * time.Second)
-
-	// Remount and verify data persisted to the sparse image
-	verifyMountPoint, err := m.Mount(volumePath, cfg.Password)
-	if err != nil {
-		return fmt.Errorf("failed to remount volume for verification: %w", err)
-	}
-
-	// Check that CLAUDE.md exists after remount
-	claudeMDVerifyPath := filepath.Join(verifyMountPoint, "home", ".claude", "CLAUDE.md")
-	if _, err := os.Stat(claudeMDVerifyPath); err != nil {
-		_ = m.Unmount(verifyMountPoint)
-		return fmt.Errorf("verification failed - CLAUDE.md not persisted to sparse image: %w", err)
-	}
-
-	// Final unmount
-	if err := m.Unmount(verifyMountPoint); err != nil {
-		return fmt.Errorf("failed to unmount volume after verification: %w", err)
 	}
 
 	return nil
 }
 
-func (m *MacOSVolumeManager) Mount(volumePath, password string) (string, error) {
+func (m *MacOSVolumeManager) Mount(volumePath string, password *terminal.SecurePassword) (string, error) {
 	// Check if this specific volume is already mounted
 	if mountPoint := m.findMountPointForVolume(volumePath); mountPoint != "" {
 		return mountPoint, nil
@@ -165,7 +112,7 @@ func (m *MacOSVolumeManager) Mount(volumePath, password string) (string, error) 
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "hdiutil", "attach", "-stdinpass", "-mountpoint", mountPoint, volumePath)
-	cmd.Stdin = strings.NewReader(password)
+	cmd.Stdin = password.Reader()
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -319,11 +266,6 @@ func (m *MacOSVolumeManager) findAnyMountedVolume() string {
 		}
 	}
 
-	// Also check legacy /Volumes mount point for backwards compatibility
-	if _, err := os.Stat(constants.MacOSMountPoint); err == nil {
-		return constants.MacOSMountPoint
-	}
-
 	return ""
 }
 
@@ -379,16 +321,6 @@ func (m *MacOSVolumeManager) findMountPointForVolume(volumePath string) string {
 			fields := strings.Fields(line)
 			for _, field := range fields {
 				if strings.HasPrefix(field, "/tmp/capsule-") || strings.HasPrefix(field, "/private/tmp/capsule-") {
-					return field
-				}
-			}
-		}
-
-		// Also check for legacy /Volumes mount point
-		if foundOurImage && strings.Contains(line, constants.MacOSMountPoint) {
-			fields := strings.Fields(line)
-			for _, field := range fields {
-				if field == constants.MacOSMountPoint {
 					return field
 				}
 			}

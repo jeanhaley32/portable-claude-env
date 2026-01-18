@@ -89,11 +89,6 @@ func (d *Detector) checkVolumeMounted() (string, bool) {
 		}
 	}
 
-	// Fall back to legacy /Volumes mount point
-	if _, err := os.Stat(constants.MacOSMountPoint); err == nil {
-		return constants.MacOSMountPoint, true
-	}
-
 	return "", false
 }
 

@@ -4,13 +4,14 @@ import (
 	"fmt"
 
 	"github.com/jeanhaley32/claude-capsule/internal/constants"
+	"github.com/jeanhaley32/claude-capsule/internal/terminal"
 )
 
 // BootstrapConfig holds configuration for creating a new encrypted volume.
 type BootstrapConfig struct {
 	Path         string
 	SizeGB       int
-	Password     string
+	Password     *terminal.SecurePassword
 	ContextFiles []string // Markdown files to extend Claude context
 }
 
@@ -23,7 +24,7 @@ func (c *BootstrapConfig) Validate() error {
 		return fmt.Errorf("volume size must be between %d and %d GB, got %d",
 			constants.MinVolumeSizeGB, constants.MaxVolumeSizeGB, c.SizeGB)
 	}
-	if c.Password == "" {
+	if c.Password == nil || c.Password.Len() == 0 {
 		return fmt.Errorf("password is required")
 	}
 	return nil
@@ -35,7 +36,8 @@ type VolumeManager interface {
 	Bootstrap(config BootstrapConfig) error
 
 	// Mount decrypts and mounts the volume, returning the mount point.
-	Mount(volumePath, password string) (mountPoint string, err error)
+	// The caller should clear the password after Mount returns.
+	Mount(volumePath string, password *terminal.SecurePassword) (mountPoint string, err error)
 
 	// Unmount unmounts and closes the encrypted volume.
 	Unmount(mountPoint string) error

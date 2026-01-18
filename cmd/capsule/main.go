@@ -193,13 +193,14 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	}
 
 	// Prompt for password
-	password, err := terminal.ReadPasswordConfirm(
+	password, err := terminal.ReadPasswordConfirmSecure(
 		"Enter encryption password: ",
 		"Confirm password: ",
 	)
 	if err != nil {
 		return fmt.Errorf("password error: %w", err)
 	}
+	defer password.Clear()
 
 	fmt.Printf("Creating encrypted volume at %s...\n", volumePath)
 
@@ -336,16 +337,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Check if volume is already mounted (reuse existing mount for fast re-entry)
 	var mountPoint string
-	var password string
+	var password *terminal.SecurePassword
 	if existingMount := volumeManager.GetMountPoint(volumePath); existingMount != "" {
 		fmt.Printf("Volume already mounted at %s\n", existingMount)
 		mountPoint = existingMount
 	} else {
 		// Prompt for password only when we need to mount
-		password, err = terminal.ReadPassword("Enter volume password: ")
+		password, err = terminal.ReadPasswordSecure("Enter volume password: ")
 		if err != nil {
 			return fmt.Errorf("password error: %w", err)
 		}
+		defer password.Clear()
 
 		// Mount volume
 		fmt.Println("Mounting encrypted volume...")
@@ -398,11 +400,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 		time.Sleep(docker.CacheRefreshDelay)
 
 		// If we didn't have a password (volume was pre-mounted), prompt now
-		if password == "" {
-			password, err = terminal.ReadPassword("Enter volume password to remount: ")
+		if password == nil {
+			password, err = terminal.ReadPasswordSecure("Enter volume password to remount: ")
 			if err != nil {
 				return fmt.Errorf("password error: %w", err)
 			}
+			defer password.Clear()
 		}
 
 		// Remount
@@ -552,10 +555,11 @@ func runUnlock(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get password from multiple sources
-	password, err := terminal.ReadPasswordMultiSource(passwordStdin, "Enter volume password: ")
+	password, err := terminal.ReadPasswordMultiSourceSecure(passwordStdin, "Enter volume password: ")
 	if err != nil {
 		return fmt.Errorf("password error: %w", err)
 	}
+	defer password.Clear()
 
 	// Mount volume
 	fmt.Fprintf(os.Stderr, "Mounting encrypted volume...\n")

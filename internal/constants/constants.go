@@ -7,9 +7,6 @@ const (
 	// MacOSVolumeFile is the filename for the encrypted volume on macOS.
 	MacOSVolumeFile = "capsule.sparseimage"
 
-	// MacOSMountPoint is the default mount point for the encrypted volume on macOS.
-	MacOSMountPoint = "/Volumes/Capsule"
-
 	// MacOSVolumeName is the volume label used when creating the encrypted volume.
 	MacOSVolumeName = "Capsule"
 )

@@ -85,8 +85,8 @@ type RepoIdentifier interface {
 - Docker follows symlinks inside mounted directories
 
 **How it works**:
-1. Encrypted volume mounted to host (e.g., `/Volumes/ClaudeEnv`)
-2. Symlink created: `workspace/_docs` points to `/Volumes/ClaudeEnv/repos/{repo-id}/`
+1. Encrypted volume mounted to host at `/tmp/capsule-<random>`
+2. Symlink created: `workspace/_docs` points to mount point's `repos/{repo-id}/`
 3. Both workspace and encrypted volume mounted to container
 4. Container accesses `_docs/` through symlink - reads/writes go directly to encrypted volume
 5. On exit, symlink removed, volume unmounted
