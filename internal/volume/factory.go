@@ -6,13 +6,12 @@ import (
 )
 
 // New creates a VolumeManager appropriate for the current operating system.
+// Currently only macOS is supported.
 func New() (VolumeManager, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		return NewMacOSVolumeManager(), nil
-	case "linux":
-		return NewLinuxVolumeManager(), nil
 	default:
-		return nil, fmt.Errorf("unsupported operating system: %s (use WSL2 on Windows)", runtime.GOOS)
+		return nil, fmt.Errorf("unsupported operating system: %s (only macOS is supported)", runtime.GOOS)
 	}
 }

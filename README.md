@@ -1,6 +1,6 @@
-# Portable Claude
+# Claude Capsule
 
-A portable, sandboxed environment for Claude Code. Take your encrypted credentials between machines while keeping the AI isolated—it can only access the project you're working on, not your home directory, SSH keys, or other sensitive files.
+A portable, sandboxed workspace for Claude Code. Take your encrypted credentials between machines while keeping the AI isolated—it can only access the project you're working on, not your home directory, SSH keys, or other sensitive files.
 
 ## Why Sandbox Your AI?
 
@@ -38,20 +38,20 @@ When you run Claude Code directly on your machine, it has access to:
 ## Prerequisites
 
 - **Go 1.21+** - to build the CLI
-- **Docker** - to run the containerized environment
-- **macOS** - currently only macOS is supported (Linux support planned)
+- **Docker Desktop** - to run the containerized environment
+- **macOS** - this tool is macOS-only (uses encrypted sparse images via `hdiutil`)
 
 ## Quick Start
 
 ### 1. Install
 
 ```bash
-git clone https://github.com/jeanhaley32/portable-claude-env.git
-cd portable-claude-env
+git clone https://github.com/jeanhaley32/claude-capsule.git
+cd claude-capsule
 make install
 ```
 
-This builds the binary and installs it to `~/.local/bin/claude-env`. Make sure `~/.local/bin` is in your PATH.
+This builds the binary and installs it to `~/.local/bin/capsule`. Make sure `~/.local/bin` is in your PATH.
 
 The Docker image is embedded in the binary and will be built automatically on first use.
 
@@ -60,7 +60,7 @@ The Docker image is embedded in the binary and will be built automatically on fi
 Create your encrypted volume:
 
 ```bash
-claude-env bootstrap --size 2
+capsule bootstrap --size 2
 ```
 
 You'll be prompted to create a password. This creates a 2GB encrypted sparse image.
@@ -76,7 +76,7 @@ Navigate to any project and start:
 
 ```bash
 cd ~/projects/my-app
-./claude-env start
+capsule start
 ```
 
 This will:
@@ -84,7 +84,7 @@ This will:
 2. Mount the encrypted volume
 3. Start the Docker container
 4. Create `_docs/` symlink for shadow documentation
-5. Drop you into a bash shell inside the container
+5. Drop you into a fish shell inside the container
 
 ### 4. Use Claude Code
 
@@ -101,8 +101,8 @@ Your credentials are stored in the encrypted volume and persist across sessions.
 Type `exit` to leave the container. The container stops but the **volume remains mounted** for fast re-entry:
 
 ```bash
-exit                    # Leave container
-./claude-env start      # Quick re-entry (no password needed)
+exit              # Leave container
+capsule start     # Quick re-entry (no password needed)
 ```
 
 ### 6. Lock When Done
@@ -110,7 +110,7 @@ exit                    # Leave container
 When you're finished working for the day, lock your credentials:
 
 ```bash
-./claude-env lock
+capsule lock
 ```
 
 This unmounts the encrypted volume, securing your credentials. The next `start` will require your password again.
@@ -129,6 +129,10 @@ This unmounts the encrypted volume, securing your credentials. The next `start` 
 | `build-image` | Build Docker image (automatic on first start) |
 | `version` | Show version information |
 
+**Start options:**
+- `--volume PATH` - Path to encrypted volume (auto-detected if not specified)
+- `--workspace PATH` - Workspace path (defaults to git root or current directory)
+
 ## Multi-Project Support
 
 Each project gets its own isolated container based on the git repository:
@@ -136,40 +140,42 @@ Each project gets its own isolated container based on the git repository:
 ```bash
 # Terminal 1
 cd ~/projects/frontend
-claude-env start    # Creates container: claude-a1b2c3d4
+capsule start    # Creates container: claude-a1b2c3d4
 
 # Terminal 2 (simultaneously)
 cd ~/projects/backend
-claude-env start    # Creates container: claude-e5f6g7h8
+capsule start    # Creates container: claude-e5f6g7h8
 ```
 
 Both containers share the same encrypted volume for credentials but run independently.
 
 ## Scripting & Automation
 
-For CI/CD or scripted workflows, you can provide the password non-interactively:
+For CI/CD or scripted workflows, use `unlock` to mount the volume non-interactively:
 
 ```bash
 # Via environment variable
-export CLAUDE_ENV_PASSWORD="your-password"
-claude-env start
+export CAPSULE_PASSWORD="your-password"
+capsule unlock
 
 # Via stdin (useful for secret managers)
-echo "your-password" | claude-env start --password-stdin
-vault read -field=password secret/claude | claude-env unlock --password-stdin
+echo "your-password" | capsule unlock --password-stdin
+vault read -field=password secret/claude | capsule unlock --password-stdin
 ```
+
+Once unlocked, `capsule start` will use the already-mounted volume without prompting for a password.
 
 The `unlock` and `lock` commands output parsable KEY=VALUE format to stdout:
 
 ```bash
-$ claude-env unlock --password-stdin <<< "$CLAUDE_ENV_PASSWORD"
-MOUNT_POINT=/tmp/claude-env-abc123
+$ capsule unlock --password-stdin <<< "$CAPSULE_PASSWORD"
+MOUNT_POINT=/tmp/capsule-abc123
 STATUS=mounted
-VOLUME_PATH=/path/to/claude-env.sparseimage
+VOLUME_PATH=/path/to/capsule.sparseimage
 
-$ claude-env lock
+$ capsule lock
 STATUS=locked
-VOLUME_PATH=/path/to/claude-env.sparseimage
+VOLUME_PATH=/path/to/capsule.sparseimage
 ```
 
 ## How It Works
@@ -177,8 +183,8 @@ VOLUME_PATH=/path/to/claude-env.sparseimage
 ### Encrypted Volume
 
 ```
-claude-env.sparseimage (encrypted, AES-256)
-└── /tmp/claude-env-<id>/ (when mounted)
+capsule.sparseimage (encrypted, AES-256)
+└── /tmp/capsule-<id>/ (when mounted)
     ├── auth/           # API keys
     ├── config/         # Settings
     ├── home/           # User home directory (Claude credentials live here)
@@ -203,6 +209,23 @@ The volume mounts to a unique path in `/tmp` for Docker compatibility.
 │  Claude Code CLI installed              │
 └─────────────────────────────────────────┘
 ```
+
+### Container Environment
+
+The container comes pre-configured with:
+
+| Tool | Description |
+|------|-------------|
+| **fish shell** | Modern shell with syntax highlighting and autosuggestions |
+| **Starship** | Cross-shell prompt with gruvbox-rainbow theme |
+| **Claude Code** | Anthropic's AI coding assistant CLI |
+| **gh** | GitHub CLI for PRs, issues, and repo management |
+| **git** | Version control |
+| **ripgrep** | Fast recursive search |
+| **jq** | JSON processor |
+| **sudo** | The `claude` user has passwordless sudo access |
+
+**Updating Claude Code**: Run `claude-upgrade` inside the container to update to the latest version.
 
 ### Shadow Documentation (`_docs/`)
 
@@ -243,15 +266,15 @@ The symlink is created inside the container and is automatically gitignored.
 - Network traffic (not encrypted by this tool)
 - Runtime memory (standard Docker security applies)
 
-**Important:** After `exit`, the volume remains mounted for fast re-entry. Run `claude-env lock` to unmount and fully secure your credentials.
+**Important:** After `exit`, the volume remains mounted for fast re-entry. Run `capsule lock` to unmount and fully secure your credentials.
 
 ## File Locations
 
 | File | Description |
 |------|-------------|
-| `claude-env.sparseimage` | Encrypted volume (keep this safe!) |
+| `capsule.sparseimage` | Encrypted volume (keep this safe!) |
 | `_docs/` | Symlink to shadow documentation (gitignored) |
-| `claude-env` | CLI binary |
+| `~/.local/bin/capsule` | CLI binary (after `make install`) |
 
 ## Troubleshooting
 
@@ -259,14 +282,14 @@ The symlink is created inside the container and is automatically gitignored.
 
 Run `bootstrap` first, or specify the volume path:
 ```bash
-./claude-env start --volume /path/to/claude-env.sparseimage
+capsule start --volume /path/to/capsule.sparseimage
 ```
 
 ### "Docker image not found"
 
 The image builds automatically on first start, but you can manually build:
 ```bash
-claude-env build-image
+capsule build-image
 ```
 
 ### "Docker is not running"
@@ -277,15 +300,15 @@ Start Docker Desktop.
 
 Rebuild the Docker image:
 ```bash
-claude-env build-image --force
+capsule build-image --force
 ```
 
 ### "operation not permitted" or "file exists" on start
 
 This can happen if Docker's VirtioFS cache has stale entries. The `lock` command automatically clears the cache, so running it again should fix the issue:
 ```bash
-./claude-env lock
-./claude-env start
+capsule lock
+capsule start
 ```
 
 ## Development
@@ -305,13 +328,13 @@ Use the `--context` flag during bootstrap to specify markdown files that extend 
 
 ```bash
 # Single context file
-claude-env bootstrap --context ./project-rules.md
+capsule bootstrap --context ./project-rules.md
 
 # Multiple context files
-claude-env bootstrap --context ./coding-standards.md --context ./api-guidelines.md
+capsule bootstrap --context ./coding-standards.md --context ./api-guidelines.md
 
 # Or comma-separated
-claude-env bootstrap --context ./rules.md,./guidelines.md
+capsule bootstrap --context ./rules.md,./guidelines.md
 ```
 
 The context is generated **once at bootstrap** and becomes part of the encrypted volume. After bootstrap, you or the agent can manually edit `~/.claude/CLAUDE.md` inside the container to modify the context.
@@ -322,4 +345,4 @@ MIT License
 
 ## Contributing
 
-Contributions welcome! Please open an issue or PR.
+Contributions welcome! Please open an issue or PR at [github.com/jeanhaley32/claude-capsule](https://github.com/jeanhaley32/claude-capsule).

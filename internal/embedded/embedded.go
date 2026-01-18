@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/jeanhaley32/portable-claude-env/internal/constants"
+	"github.com/jeanhaley32/claude-capsule/internal/constants"
 )
 
 //go:embed Dockerfile
@@ -17,7 +17,7 @@ var Dockerfile []byte
 // Returns nil if successful, error otherwise.
 func BuildImage(imageName string) error {
 	// Create temp directory for build context
-	tempDir, err := os.MkdirTemp("", "claude-env-build-*")
+	tempDir, err := os.MkdirTemp("", "capsule-build-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}

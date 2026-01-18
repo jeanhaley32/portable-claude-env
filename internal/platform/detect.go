@@ -7,7 +7,6 @@ type OS string
 
 const (
 	MacOS   OS = "darwin"
-	Linux   OS = "linux"
 	Unknown OS = "unknown"
 )
 
@@ -16,8 +15,6 @@ func Detect() OS {
 	switch runtime.GOOS {
 	case "darwin":
 		return MacOS
-	case "linux":
-		return Linux
 	default:
 		return Unknown
 	}
@@ -28,13 +25,8 @@ func IsMacOS() bool {
 	return Detect() == MacOS
 }
 
-// IsLinux returns true if running on Linux.
-func IsLinux() bool {
-	return Detect() == Linux
-}
-
 // IsSupported returns true if the current OS is supported.
+// Currently only macOS is supported.
 func IsSupported() bool {
-	os := Detect()
-	return os == MacOS || os == Linux
+	return Detect() == MacOS
 }

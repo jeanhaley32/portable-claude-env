@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jeanhaley32/portable-claude-env/internal/config"
-	"github.com/jeanhaley32/portable-claude-env/internal/constants"
-	"github.com/jeanhaley32/portable-claude-env/internal/embedded"
+	"github.com/jeanhaley32/claude-capsule/internal/config"
+	"github.com/jeanhaley32/claude-capsule/internal/constants"
+	"github.com/jeanhaley32/claude-capsule/internal/embedded"
 )
 
 // mountPointPrefix is the prefix for unique mount points in /tmp
-const mountPointPrefix = "/tmp/claude-env-"
+const mountPointPrefix = "/tmp/capsule-"
 
 // Timeout for volume operations (hdiutil can be slow for large volumes)
 const volumeOperationTimeout = 5 * time.Minute
@@ -332,7 +332,7 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, context
 	return nil
 }
 
-// findAnyMountedVolume finds the mount point for any mounted claude-env volume.
+// findAnyMountedVolume finds the mount point for any mounted capsule volume.
 // This is a fallback for cases where we don't know the specific volume path.
 func (m *MacOSVolumeManager) findAnyMountedVolume() string {
 	// Check for our unique mount points in /tmp
@@ -342,7 +342,7 @@ func (m *MacOSVolumeManager) findAnyMountedVolume() string {
 	}
 
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "claude-env-") && entry.IsDir() {
+		if strings.HasPrefix(entry.Name(), "capsule-") && entry.IsDir() {
 			mountPoint := filepath.Join("/tmp", entry.Name())
 			// Verify it's actually mounted by checking for content
 			contents, err := os.ReadDir(mountPoint)
@@ -405,11 +405,11 @@ func (m *MacOSVolumeManager) findMountPointForVolume(volumePath string) string {
 
 		// If we found our image, look for mount point
 		// Note: hdiutil returns /private/tmp on macOS (since /tmp -> /private/tmp)
-		if foundOurImage && (strings.Contains(line, "/tmp/claude-env-") || strings.Contains(line, "/private/tmp/claude-env-")) {
-			// Line format: "/dev/diskXsY	Apple_APFS	/private/tmp/claude-env-xxx"
+		if foundOurImage && (strings.Contains(line, "/tmp/capsule-") || strings.Contains(line, "/private/tmp/capsule-")) {
+			// Line format: "/dev/diskXsY	Apple_APFS	/private/tmp/capsule-xxx"
 			fields := strings.Fields(line)
 			for _, field := range fields {
-				if strings.HasPrefix(field, "/tmp/claude-env-") || strings.HasPrefix(field, "/private/tmp/claude-env-") {
+				if strings.HasPrefix(field, "/tmp/capsule-") || strings.HasPrefix(field, "/private/tmp/capsule-") {
 					return field
 				}
 			}

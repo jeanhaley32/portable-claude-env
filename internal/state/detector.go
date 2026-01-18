@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jeanhaley32/portable-claude-env/internal/constants"
+	"github.com/jeanhaley32/claude-capsule/internal/constants"
 )
 
 // Timeout for state detection commands
 const stateCheckTimeout = 10 * time.Second
 
-// EnvironmentState represents the current state of the claude-env environment.
+// EnvironmentState represents the current state of the capsule environment.
 type EnvironmentState struct {
 	VolumeExists     bool
 	VolumePath       string
@@ -78,7 +78,7 @@ func (d *Detector) checkVolumeMounted() (string, bool) {
 	entries, err := os.ReadDir("/tmp")
 	if err == nil {
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), "claude-env-") && entry.IsDir() {
+			if strings.HasPrefix(entry.Name(), "capsule-") && entry.IsDir() {
 				mountPoint := filepath.Join("/tmp", entry.Name())
 				// Verify it's actually mounted by checking for content
 				contents, err := os.ReadDir(mountPoint)

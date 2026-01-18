@@ -1,4 +1,4 @@
-BINARY_NAME := claude-env
+BINARY_NAME := capsule
 BUILD_DIR := .
 INSTALL_DIR := $(HOME)/.local/bin
 
@@ -8,7 +8,7 @@ all: build
 
 ## Build the binary
 build:
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/claude-env
+	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/capsule
 
 ## Install binary to ~/.local/bin (creates hard link)
 install: build

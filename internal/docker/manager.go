@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jeanhaley32/portable-claude-env/internal/constants"
+	"github.com/jeanhaley32/claude-capsule/internal/constants"
 )
 
 // Timeout configuration for Docker commands
@@ -30,8 +30,8 @@ const (
 )
 
 const (
-	DefaultImageName     = "portable-claude:latest"
-	DefaultContainerName = "portable-claude"
+	DefaultImageName     = "claude-capsule:latest"
+	DefaultContainerName = "claude-capsule"
 )
 
 // Manager implements DockerManager using the Docker CLI.
@@ -162,7 +162,7 @@ func (m *Manager) Exec(containerName string) error {
 		containerName = DefaultContainerName
 	}
 
-	cmd := exec.Command("docker", "exec", "-it", containerName, "/bin/zsh")
+	cmd := exec.Command("docker", "exec", "-it", containerName, "/usr/bin/fish")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -251,7 +251,7 @@ func (m *Manager) checkDockerRunning() error {
 // This is required because we mount encrypted volumes to unique paths in /tmp.
 func (m *Manager) CheckTmpFileSharing() error {
 	// Create a test directory with unique name
-	testDir := fmt.Sprintf("/tmp/claude-env-docker-check-%d", time.Now().UnixNano())
+	testDir := fmt.Sprintf("/tmp/capsule-docker-check-%d", time.Now().UnixNano())
 	if err := os.MkdirAll(testDir, constants.DirPermissions); err != nil {
 		return fmt.Errorf("failed to create test directory: %w", err)
 	}

@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jeanhaley32/portable-claude-env/internal/constants"
+	"github.com/jeanhaley32/claude-capsule/internal/constants"
 )
 
 // Manager implements SymlinkManager.

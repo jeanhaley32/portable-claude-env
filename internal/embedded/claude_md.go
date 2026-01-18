@@ -92,5 +92,5 @@ _docs/
 - **exit**: Container stops, volume stays mounted for quick re-entry
 - **lock**: Volume is unmounted, credentials are secured
 
-The user can quickly re-enter with ` + "`claude-env start`" + ` without re-entering their password (until they run ` + "`lock`" + `).
+The user can quickly re-enter with ` + "`capsule start`" + ` without re-entering their password (until they run ` + "`lock`" + `).
 `

@@ -12,14 +12,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jeanhaley32/portable-claude-env/internal/constants"
-	"github.com/jeanhaley32/portable-claude-env/internal/docker"
-	"github.com/jeanhaley32/portable-claude-env/internal/embedded"
-	"github.com/jeanhaley32/portable-claude-env/internal/platform"
-	"github.com/jeanhaley32/portable-claude-env/internal/repo"
-	"github.com/jeanhaley32/portable-claude-env/internal/state"
-	"github.com/jeanhaley32/portable-claude-env/internal/terminal"
-	"github.com/jeanhaley32/portable-claude-env/internal/volume"
+	"github.com/jeanhaley32/claude-capsule/internal/constants"
+	"github.com/jeanhaley32/claude-capsule/internal/docker"
+	"github.com/jeanhaley32/claude-capsule/internal/embedded"
+	"github.com/jeanhaley32/claude-capsule/internal/platform"
+	"github.com/jeanhaley32/claude-capsule/internal/repo"
+	"github.com/jeanhaley32/claude-capsule/internal/state"
+	"github.com/jeanhaley32/claude-capsule/internal/terminal"
+	"github.com/jeanhaley32/claude-capsule/internal/volume"
 )
 
 var version = "0.3.0"
@@ -85,9 +85,9 @@ func createShutdownCleanup(volumePath, containerName string) func() {
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "claude-env",
-		Short: "Portable Claude Code development environment",
-		Long:  "A containerized, security-focused development environment for Claude Code with encrypted credential storage.",
+		Use:   "capsule",
+		Short: "Claude Capsule workspace environment",
+		Long:  "A containerized, security-focused workspace for Claude Code with encrypted credential storage.",
 	}
 
 	rootCmd.AddCommand(
@@ -218,8 +218,8 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	fmt.Println("Volume created successfully!")
 	fmt.Println("")
 	fmt.Println("Next steps:")
-	fmt.Println("  1. Build the Docker image: docker build -t portable-claude:latest .")
-	fmt.Println("  2. Start the environment: claude-env start")
+	fmt.Println("  1. Build the Docker image: capsule build-image")
+	fmt.Println("  2. Start the workspace: capsule start")
 
 	return nil
 }
@@ -270,7 +270,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 		volumePath = volumeManager.GetVolumePath(cwd)
 		if !volumeManager.Exists(volumePath) {
-			return fmt.Errorf("volume not found at %s. Run 'claude-env bootstrap' first or specify --volume", volumePath)
+			return fmt.Errorf("volume not found at %s. Run 'capsule bootstrap' first or specify --volume", volumePath)
 		}
 	}
 
@@ -458,7 +458,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println("Volume remains unlocked for quick re-entry.")
-	fmt.Println("Run 'claude-env lock' when done to secure your credentials.")
+	fmt.Println("Run 'capsule lock' when done to secure your credentials.")
 
 	// Ignore common exit codes (0 = normal, 130 = Ctrl+C)
 	if execErr != nil {
@@ -490,13 +490,13 @@ func newUnlockCmd() *cobra.Command {
 This allows injecting files or accessing the volume from external processes.
 
 Output is in KEY=VALUE format for easy parsing:
-  MOUNT_POINT=/tmp/claude-env-abc123
+  MOUNT_POINT=/tmp/capsule-abc123
   STATUS=mounted
 
 Password can be provided via:
   - Interactive prompt (default)
-  - --password-stdin flag: echo $PASS | claude-env unlock --password-stdin
-  - CLAUDE_ENV_PASSWORD environment variable`,
+  - --password-stdin flag: echo $PASS | capsule unlock --password-stdin
+  - CAPSULE_PASSWORD environment variable`,
 		RunE: runUnlock,
 	}
 
@@ -536,7 +536,7 @@ func runUnlock(cmd *cobra.Command, args []string) error {
 		}
 		volumePath = volumeManager.GetVolumePath(cwd)
 		if !volumeManager.Exists(volumePath) {
-			return fmt.Errorf("volume not found at %s. Run 'claude-env bootstrap' first or specify --volume", volumePath)
+			return fmt.Errorf("volume not found at %s. Run 'capsule bootstrap' first or specify --volume", volumePath)
 		}
 	}
 
@@ -567,7 +567,7 @@ func runUnlock(cmd *cobra.Command, args []string) error {
 	fmt.Printf("STATUS=mounted\n")
 	fmt.Printf("VOLUME_PATH=%s\n", volumePath)
 
-	fmt.Fprintf(os.Stderr, "Volume unlocked. Run 'claude-env lock' to secure.\n")
+	fmt.Fprintf(os.Stderr, "Volume unlocked. Run 'capsule lock' to secure.\n")
 	return nil
 }
 
@@ -670,7 +670,7 @@ func runStop(cmd *cobra.Command, args []string) error {
 	}
 
 	// Keep volume mounted for quick re-entry
-	fmt.Println("Volume remains mounted. Run 'claude-env lock' to unmount and secure.")
+	fmt.Println("Volume remains mounted. Run 'capsule lock' to unmount and secure.")
 	return nil
 }
 
@@ -769,7 +769,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// Image status
 	if !state.CheckImageExists(docker.DefaultImageName) {
 		fmt.Printf("\nWarning: Docker image '%s' not found.\n", docker.DefaultImageName)
-		fmt.Println("Build it with: claude-env build-image")
+		fmt.Println("Build it with: capsule build-image")
 	}
 
 	return nil
@@ -813,7 +813,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Show version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("claude-env version %s\n", version)
+			fmt.Printf("capsule version %s\n", version)
 			fmt.Printf("Platform: %s\n", platform.Detect())
 		},
 	}

@@ -3,7 +3,7 @@
 ## Project Overview
 A containerized, security-focused development environment for Claude Code that can be deployed across different workspaces while keeping credentials and context centralized in an encrypted volume. This is a **personal AI-augmented learning and development environment** that maintains strict separation from version control systems.
 
-**Implementation**: Built in Go with interface-based architecture for cross-platform support (macOS + Linux).
+**Implementation**: Built in Go for macOS.
 
 ## Goals
 - Enable portable Claude Code usage across multiple machines and workspaces
@@ -12,7 +12,6 @@ A containerized, security-focused development environment for Claude Code that c
 - Simple one-command startup from any project directory
 - Accelerate learning and understanding of unfamiliar codebases
 - Create persistent AI context that travels with you
-- Cross-platform support (macOS and Linux)
 - Single binary distribution with no runtime dependencies
 
 ## Critical Security Boundary
@@ -24,23 +23,15 @@ A containerized, security-focused development environment for Claude Code that c
 
 ## Platform Support
 **Supported Operating Systems**:
-- **macOS**: Uses native `hdiutil` for encrypted DMG creation
-- **Linux**: Uses `cryptsetup` with LUKS encryption
-- **Windows**: Not supported (use WSL2 with Linux method)
-
-**Cross-Platform Design**:
-- Single Go binary works on both macOS and Linux
-- OS detection automatic
-- Platform-specific encryption handled via interfaces
+- **macOS**: Uses native `hdiutil` for encrypted sparse image creation (AES-256)
+- **Linux/Windows**: Not supported
 
 ## Architecture
 
 ### Implementation Language
 **Go** - Chosen for:
 - Single binary distribution (no dependencies)
-- Native cross-compilation (build for macOS/Linux from either platform)
 - Excellent standard library for file operations and process execution
-- Strong interface support for clean OS abstraction
 - Robust error handling
 - Easy testing with mockable interfaces
 
@@ -76,19 +67,13 @@ type RepoIdentifier interface {
 }
 ```
 
-### OS-Specific Implementations
+### Volume Implementation
 
-**MacOS (MacOSVolumeManager)**:
-- Uses `hdiutil` for encrypted DMG creation and mounting
-- Volume file: `claude-env.dmg`
+**MacOSVolumeManager**:
+- Uses `hdiutil` for encrypted sparse image creation and mounting
+- Volume file: `capsule.sparseimage`
 - Encryption: AES-256
-- Mount point: `/Volumes/ClaudeEnv`
-
-**Linux (LinuxVolumeManager)**:
-- Uses `cryptsetup` with LUKS encryption
-- Volume file: `claude-env.img`
-- Encryption: LUKS2 with AES
-- Mount point: `/tmp/claude-env-mount`
+- Mount point: `/tmp/capsule-<random>/` (unique per session for Docker compatibility)
 
 ### Shadow Documentation Strategy
 
@@ -210,32 +195,39 @@ Auto-cleanup: stop container → unmount → cleanup
 ## File Structure
 
 ```
-portable-claude-env/
+claude-capsule/
 ├── cmd/
-│   └── claude-env/
+│   └── capsule/
 │       └── main.go                 # CLI entry point
 ├── internal/
 │   ├── volume/
 │   │   ├── interface.go           # VolumeManager interface
 │   │   ├── macos.go               # macOS implementation (hdiutil)
-│   │   ├── linux.go               # Linux implementation (LUKS)
-│   │   └── factory.go             # OS detection & VolumeManager creation
+│   │   └── factory.go             # VolumeManager creation
 │   ├── docker/
-│   │   ├── interface.go           # DockerManager interface
 │   │   └── manager.go             # Docker operations
-│   ├── sync/
-│   │   ├── interface.go           # SyncManager interface
-│   │   └── manager.go             # _docs sync operations
+│   ├── embedded/
+│   │   ├── embedded.go            # Embedded Dockerfile handling
+│   │   └── Dockerfile             # Claude Code container definition
+│   ├── symlink/
+│   │   └── manager.go             # _docs symlink operations
+│   ├── repo/
+│   │   └── identifier.go          # Repository identification
+│   ├── state/
+│   │   └── detector.go            # Environment state detection
+│   ├── terminal/
+│   │   └── password.go            # Secure password input
 │   ├── config/
 │   │   └── config.go              # Configuration structs
+│   ├── constants/
+│   │   └── constants.go           # App-wide constants
 │   └── platform/
 │       └── detect.go              # OS detection utilities
-├── Dockerfile                      # Claude Code container definition
 ├── go.mod                          # Go module definition
 ├── go.sum                          # Go dependencies
+├── Makefile                        # Build and install targets
 ├── README.md                       # User documentation
-├── claude-env.dmg                  # (macOS) Encrypted volume
-└── claude-env.img                  # (Linux) Encrypted volume
+└── capsule.sparseimage             # Encrypted volume (user-created)
 ```
 
 ## Implementation Steps
@@ -306,15 +298,12 @@ claude-env status
 
 ### Development Environment
 - Go 1.21 or higher
-- Docker installed and running
-- Platform-specific encryption tools:
-  - **macOS**: hdiutil (built-in)
-  - **Linux**: cryptsetup (install via package manager)
+- Docker Desktop installed and running
+- macOS with `hdiutil` (built-in)
 
 ### Runtime Requirements
-- Docker Desktop (macOS) or Docker Engine (Linux)
+- Docker Desktop for macOS
 - 2-5GB available disk space for encrypted volume
-- sudo/admin privileges for volume mounting
 
 ### Credentials Needed
 - Claude API key from https://console.anthropic.com/

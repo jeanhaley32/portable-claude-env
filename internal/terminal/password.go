@@ -11,7 +11,7 @@ import (
 )
 
 // PasswordEnvVar is the environment variable name for the volume password.
-const PasswordEnvVar = "CLAUDE_ENV_PASSWORD"
+const PasswordEnvVar = "CAPSULE_PASSWORD"
 
 // SecurePassword wraps a password with the ability to clear it from memory.
 type SecurePassword struct {
@@ -126,7 +126,7 @@ func ReadPasswordFromStdin() (string, error) {
 	return strings.TrimSuffix(password, "\n"), nil
 }
 
-// ReadPasswordFromEnv reads the password from CLAUDE_ENV_PASSWORD environment variable.
+// ReadPasswordFromEnv reads the password from CAPSULE_PASSWORD environment variable.
 // Returns empty string if not set.
 func ReadPasswordFromEnv() string {
 	return os.Getenv(PasswordEnvVar)
@@ -134,7 +134,7 @@ func ReadPasswordFromEnv() string {
 
 // ReadPasswordMultiSource attempts to read password from multiple sources in order:
 // 1. If useStdin is true, read from stdin (for piped input)
-// 2. Check CLAUDE_ENV_PASSWORD environment variable
+// 2. Check CAPSULE_PASSWORD environment variable
 // 3. Fall back to interactive terminal prompt
 func ReadPasswordMultiSource(useStdin bool, prompt string) (string, error) {
 	// Option 1: Read from stdin if flag is set

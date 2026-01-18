@@ -5,19 +5,13 @@ import "os"
 // Volume-related constants
 const (
 	// MacOSVolumeFile is the filename for the encrypted volume on macOS.
-	MacOSVolumeFile = "claude-env.sparseimage"
+	MacOSVolumeFile = "capsule.sparseimage"
 
 	// MacOSMountPoint is the default mount point for the encrypted volume on macOS.
-	MacOSMountPoint = "/Volumes/ClaudeEnv"
+	MacOSMountPoint = "/Volumes/Capsule"
 
 	// MacOSVolumeName is the volume label used when creating the encrypted volume.
-	MacOSVolumeName = "ClaudeEnv"
-
-	// LinuxVolumeFile is the filename for the encrypted volume on Linux.
-	LinuxVolumeFile = "claude-env.img"
-
-	// LinuxMountPoint is the default mount point for the encrypted volume on Linux.
-	LinuxMountPoint = "/tmp/claude-env-mount"
+	MacOSVolumeName = "Capsule"
 )
 
 // Shadow documentation constants

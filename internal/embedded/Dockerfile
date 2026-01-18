@@ -1,24 +1,36 @@
 FROM node:20-slim
 
 LABEL maintainer="jeanhaley32"
-LABEL description="Portable Claude Code development environment"
+LABEL description="Claude Capsule workspace environment"
 
-# Install system dependencies including zsh and sudo
+# Install system dependencies including fish and fonts
 RUN apt-get update && apt-get install -y \
     git \
     curl \
     gh \
     jq \
     ripgrep \
-    zsh \
+    fish \
     sudo \
+    fontconfig \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Nerd Font (FiraCode)
+RUN mkdir -p /usr/local/share/fonts && \
+    curl -fLo /tmp/FiraCode.zip https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.zip && \
+    unzip /tmp/FiraCode.zip -d /usr/local/share/fonts/FiraCode && \
+    rm /tmp/FiraCode.zip && \
+    fc-cache -fv
+
+# Install Starship prompt
+RUN curl -sS https://starship.rs/install.sh | sh -s -- -y
 
 # Install Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
 # Create non-root user with sudo access
-RUN useradd -m -s /bin/zsh claude && \
+RUN useradd -m -s /usr/bin/fish claude && \
     mkdir -p /claude-env /workspace && \
     chown -R claude:claude /claude-env /workspace && \
     echo "claude ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/claude
@@ -56,23 +68,41 @@ RUN chmod +x /usr/local/bin/setup-workspace-symlink.sh
 USER claude
 WORKDIR /workspace
 
-# Install Oh My Zsh
-RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended && \
-    sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="agnoster"/' ~/.zshrc
+# Configure fish with Starship
+RUN mkdir -p ~/.config/fish && \
+    cat > ~/.config/fish/config.fish << 'FISHCONFIG'
+if status is-interactive
+    # Commands to run in interactive sessions can go here
+end
+starship init fish | source
 
-# Copy Oh My Zsh to /etc/skel for use with custom HOME directories
+# Upgrade Claude Code to the latest version
+function claude-upgrade
+    echo "Upgrading Claude Code..."
+    npm update -g @anthropic-ai/claude-code
+    echo "Current version:"
+    claude --version
+end
+FISHCONFIG
+
+# Configure Starship with gruvbox-rainbow preset
+RUN mkdir -p ~/.config && \
+    starship preset gruvbox-rainbow -o ~/.config/starship.toml
+
+# Copy fish config to /etc/skel for use with custom HOME directories
 USER root
-RUN cp -r /home/claude/.oh-my-zsh /etc/skel/.oh-my-zsh && \
-    cp /home/claude/.zshrc /etc/skel/.zshrc
+RUN mkdir -p /etc/skel/.config && \
+    cp -r /home/claude/.config/fish /etc/skel/.config/ && \
+    cp /home/claude/.config/starship.toml /etc/skel/.config/starship.toml
 
-# Add init script to set up Oh My Zsh in $HOME if missing
-RUN cat > /etc/zsh/zshenv << 'INITSCRIPT'
-# Initialize Oh My Zsh in $HOME if not present
-if [ -n "$HOME" ] && [ ! -d "$HOME/.oh-my-zsh" ]; then
-    mkdir -p "$HOME"
-    cp -r /etc/skel/.oh-my-zsh "$HOME/.oh-my-zsh" 2>/dev/null || true
-    cp /etc/skel/.zshrc "$HOME/.zshrc" 2>/dev/null || true
-fi
+# Add init script to set up fish config in $HOME if missing
+RUN cat > /etc/fish/conf.d/init-home.fish << 'INITSCRIPT'
+# Initialize fish config in $HOME if not present
+if test -n "$HOME"; and not test -f "$HOME/.config/fish/config.fish"
+    mkdir -p "$HOME/.config/fish" 2>/dev/null; or true
+    cp /etc/skel/.config/fish/config.fish "$HOME/.config/fish/config.fish" 2>/dev/null; or true
+    cp /etc/skel/.config/starship.toml "$HOME/.config/starship.toml" 2>/dev/null; or true
+end
 INITSCRIPT
 
 USER claude
@@ -80,7 +110,7 @@ USER claude
 # Environment variables
 ENV CLAUDE_ENV_PATH=/claude-env
 ENV ANTHROPIC_API_KEY_FILE=/claude-env/auth/api-key
-ENV SHELL=/bin/zsh
+ENV SHELL=/usr/bin/fish
 
 # Entry point
-ENTRYPOINT ["/bin/zsh"]
+ENTRYPOINT ["/usr/bin/fish"]

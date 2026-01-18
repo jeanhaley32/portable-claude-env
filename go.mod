@@ -1,4 +1,4 @@
-module github.com/jeanhaley32/portable-claude-env
+module github.com/jeanhaley32/claude-capsule
 
 go 1.24.0
 

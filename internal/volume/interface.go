@@ -3,7 +3,7 @@ package volume
 import (
 	"fmt"
 
-	"github.com/jeanhaley32/portable-claude-env/internal/constants"
+	"github.com/jeanhaley32/claude-capsule/internal/constants"
 )
 
 // BootstrapConfig holds configuration for creating a new encrypted volume.
