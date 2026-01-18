@@ -136,9 +136,11 @@ func newBootstrapCmd() *cobra.Command {
 		RunE:  runBootstrap,
 	}
 
-	cmd.Flags().Int("size", 2, "Volume size in GB")
+	cmd.Flags().Int("size", 0, "Volume size in GB (prompts if not specified)")
 	cmd.Flags().String("api-key", "", "Claude API key (optional, can be added later)")
-	cmd.Flags().String("path", ".", "Path for encrypted volume")
+	cmd.Flags().String("volume", "", "Explicit path for encrypted volume")
+	cmd.Flags().Bool("local", false, "Create volume in current directory")
+	cmd.Flags().Bool("global", false, "Create volume in ~/.capsule/volumes/ (default)")
 	cmd.Flags().StringSlice("context", []string{}, "Markdown files to extend Claude context (can be specified multiple times)")
 
 	return cmd
@@ -153,9 +155,17 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid api-key flag: %w", err)
 	}
-	basePath, err := cmd.Flags().GetString("path")
+	volumePathFlag, err := cmd.Flags().GetString("volume")
 	if err != nil {
-		return fmt.Errorf("invalid path flag: %w", err)
+		return fmt.Errorf("invalid volume flag: %w", err)
+	}
+	localFlag, err := cmd.Flags().GetBool("local")
+	if err != nil {
+		return fmt.Errorf("invalid local flag: %w", err)
+	}
+	globalFlag, err := cmd.Flags().GetBool("global")
+	if err != nil {
+		return fmt.Errorf("invalid global flag: %w", err)
 	}
 	contextFiles, err := cmd.Flags().GetStringSlice("context")
 	if err != nil {
@@ -173,10 +183,71 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Convert to absolute path
-	absPath, err := filepath.Abs(basePath)
+	// Create path resolver
+	pathResolver, err := volume.NewPathResolver()
 	if err != nil {
-		return fmt.Errorf("invalid path: %w", err)
+		return fmt.Errorf("failed to create path resolver: %w", err)
+	}
+
+	// Get current directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Determine volume path based on flags or interactive prompt
+	var volumePath string
+	locationSpecified := volumePathFlag != "" || localFlag || globalFlag
+
+	if volumePathFlag != "" {
+		// Explicit path provided
+		volumePath = volumePathFlag
+		if !filepath.IsAbs(volumePath) {
+			volumePath, err = filepath.Abs(volumePath)
+			if err != nil {
+				return fmt.Errorf("invalid volume path: %w", err)
+			}
+		}
+	} else if localFlag {
+		// Local flag
+		volumePath = pathResolver.GetLocalVolumePath(cwd)
+	} else if globalFlag {
+		// Global flag
+		volumePath = pathResolver.GetDefaultVolumePath()
+	} else {
+		// Interactive prompt for location
+		options := []string{
+			"Global (~/.capsule/volumes/) - accessible from any project (Recommended)",
+			"Local (./capsule.sparseimage) - specific to this directory",
+		}
+		choice, err := terminal.PromptChoice("Where should the encrypted volume be stored?", options, 0)
+		if err != nil {
+			return fmt.Errorf("failed to get location choice: %w", err)
+		}
+		if choice == 0 {
+			volumePath = pathResolver.GetDefaultVolumePath()
+		} else {
+			volumePath = pathResolver.GetLocalVolumePath(cwd)
+		}
+	}
+
+	// Prompt for size if not specified
+	if size == 0 {
+		if locationSpecified {
+			// If location was specified via flag, use default size
+			size = 2
+		} else {
+			// Interactive prompt for size
+			size, err = terminal.PromptIntWithDefault("Volume size in GB", 2)
+			if err != nil {
+				return fmt.Errorf("failed to get size: %w", err)
+			}
+		}
+	}
+
+	// Validate size
+	if size < constants.MinVolumeSizeGB || size > constants.MaxVolumeSizeGB {
+		return fmt.Errorf("volume size must be between %d and %d GB", constants.MinVolumeSizeGB, constants.MaxVolumeSizeGB)
 	}
 
 	// Create volume manager
@@ -184,8 +255,6 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
-
-	volumePath := volumeManager.GetVolumePath(absPath)
 
 	// Check if volume already exists
 	if volumeManager.Exists(volumePath) {
@@ -206,7 +275,7 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 
 	// Bootstrap the volume
 	cfg := volume.BootstrapConfig{
-		Path:         absPath,
+		VolumePath:   volumePath,
 		SizeGB:       size,
 		Password:     password,
 		ContextFiles: contextFiles,
@@ -278,13 +347,16 @@ func runStart(cmd *cobra.Command, args []string) error {
 	dockerManager := docker.NewManager()
 	repoIdentifier := repo.NewIdentifier()
 
-	// Find volume path
-	volumePath := volumePathFlag
-	if volumePath == "" {
-		volumePath = volumeManager.GetVolumePath(cwd)
-		if !volumeManager.Exists(volumePath) {
-			return fmt.Errorf("volume not found at %s. Run 'capsule bootstrap' first or specify --volume", volumePath)
-		}
+	// Create path resolver
+	pathResolver, err := volume.NewPathResolver()
+	if err != nil {
+		return fmt.Errorf("failed to create path resolver: %w", err)
+	}
+
+	// Find volume path using priority rules
+	volumePath, err := pathResolver.ResolveVolumePathStrict(volumePathFlag, cwd)
+	if err != nil {
+		return err
 	}
 
 	// Determine workspace
@@ -531,23 +603,28 @@ func runUnlock(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid password-stdin flag: %w", err)
 	}
 
+	// Get current directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
 	// Create volume manager
 	volumeManager, err := volume.New()
 	if err != nil {
 		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
 
-	// Find volume path
-	volumePath := volumePathFlag
-	if volumePath == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
-		volumePath = volumeManager.GetVolumePath(cwd)
-		if !volumeManager.Exists(volumePath) {
-			return fmt.Errorf("volume not found at %s. Run 'capsule bootstrap' first or specify --volume", volumePath)
-		}
+	// Create path resolver
+	pathResolver, err := volume.NewPathResolver()
+	if err != nil {
+		return fmt.Errorf("failed to create path resolver: %w", err)
+	}
+
+	// Find volume path using priority rules
+	volumePath, err := pathResolver.ResolveVolumePathStrict(volumePathFlag, cwd)
+	if err != nil {
+		return err
 	}
 
 	// Check if already mounted
@@ -594,10 +671,17 @@ Output is in KEY=VALUE format for easy parsing:
 		RunE: runLock,
 	}
 
+	cmd.Flags().String("volume", "", "Path to encrypted volume (auto-detected if not specified)")
+
 	return cmd
 }
 
 func runLock(cmd *cobra.Command, args []string) error {
+	volumePathFlag, err := cmd.Flags().GetString("volume")
+	if err != nil {
+		return fmt.Errorf("invalid volume flag: %w", err)
+	}
+
 	// Get container name and cwd for current directory
 	containerName, cwd, err := getContainerNameForCwd()
 	if err != nil {
@@ -610,7 +694,14 @@ func runLock(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
 
-	volumePath := volumeManager.GetVolumePath(cwd)
+	// Create path resolver
+	pathResolver, err := volume.NewPathResolver()
+	if err != nil {
+		return fmt.Errorf("failed to create path resolver: %w", err)
+	}
+
+	// Find volume path using priority rules (allow non-existent for status reporting)
+	volumePath, _ := pathResolver.ResolveVolumePath(volumePathFlag, cwd)
 
 	// Get the mount point for this specific volume (not any volume)
 	mountPoint := volumeManager.GetMountPoint(volumePath)
@@ -690,15 +781,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	volumeManager, err := volume.New()
+	// Create path resolver
+	pathResolver, err := volume.NewPathResolver()
 	if err != nil {
-		return fmt.Errorf("failed to create volume manager: %w", err)
+		return fmt.Errorf("failed to create path resolver: %w", err)
 	}
 
-	volumePath := volumePathFlag
-	if volumePath == "" {
-		volumePath = volumeManager.GetVolumePath(cwd)
-	}
+	// Find volume path using priority rules (allow non-existent for status display)
+	volumePath, _ := pathResolver.ResolveVolumePath(volumePathFlag, cwd)
 
 	// Create detector
 	detector := state.NewDetector(volumePath, containerName, cwd)

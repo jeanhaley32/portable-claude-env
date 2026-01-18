@@ -9,6 +9,12 @@ const (
 
 	// MacOSVolumeName is the volume label used when creating the encrypted volume.
 	MacOSVolumeName = "Capsule"
+
+	// CapsuleConfigDir is the name of the user config directory under home.
+	CapsuleConfigDir = ".capsule"
+
+	// VolumesSubdir is the subdirectory under CapsuleConfigDir for volumes.
+	VolumesSubdir = "volumes"
 )
 
 // Shadow documentation constants

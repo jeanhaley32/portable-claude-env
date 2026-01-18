@@ -37,11 +37,17 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 		return fmt.Errorf("invalid bootstrap config: %w", err)
 	}
 
-	volumePath := filepath.Join(cfg.Path, constants.MacOSVolumeFile)
+	volumePath := cfg.VolumePath
 
 	// Check if volume already exists
 	if m.Exists(volumePath) {
 		return fmt.Errorf("volume already exists at %s", volumePath)
+	}
+
+	// Ensure parent directory exists
+	parentDir := filepath.Dir(volumePath)
+	if err := os.MkdirAll(parentDir, constants.DirPermissions); err != nil {
+		return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 	}
 
 	// Create encrypted sparse image with timeout
@@ -187,10 +193,6 @@ func (m *MacOSVolumeManager) Unmount(mountPoint string) error {
 func (m *MacOSVolumeManager) Exists(volumePath string) bool {
 	_, err := os.Stat(volumePath)
 	return err == nil
-}
-
-func (m *MacOSVolumeManager) GetVolumePath(baseDir string) string {
-	return filepath.Join(baseDir, constants.MacOSVolumeFile)
 }
 
 // createDirectoryStructure creates the required directories inside the mounted volume.
