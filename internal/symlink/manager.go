@@ -63,7 +63,7 @@ func (m *Manager) RemoveSymlink(workspacePath string) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return err
+		return fmt.Errorf("failed to check symlink %s: %w", symlinkPath, err)
 	}
 
 	if info.Mode()&os.ModeSymlink != 0 {

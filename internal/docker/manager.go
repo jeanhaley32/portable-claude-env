@@ -78,8 +78,6 @@ func (m *Manager) Start(config ContainerConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 	defer cancel()
 
-	fmt.Fprintf(os.Stderr, "[docker] Starting container with mount: %s\n", config.VolumeMountPoint)
-
 	// Use --mount with consistency=delegated to reduce Docker Desktop caching issues
 	// delegated mode gives container authority over filesystem state
 	volumeMount := fmt.Sprintf("type=bind,source=%s,target=/claude-env,consistency=delegated", config.VolumeMountPoint)
@@ -106,7 +104,6 @@ func (m *Manager) Start(config ContainerConfig) error {
 		return fmt.Errorf("failed to start container: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 
-	fmt.Fprintf(os.Stderr, "[docker] Container started successfully\n")
 	return nil
 }
 

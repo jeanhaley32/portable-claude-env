@@ -36,8 +36,8 @@ func setupShutdownHandler(cleanup func()) func() {
 	go func() {
 		select {
 		case sig := <-sigChan:
-			fmt.Fprintf(os.Stderr, "\n[shutdown] Received signal: %v\n", sig)
-			fmt.Fprintf(os.Stderr, "[shutdown] Cleaning up and locking volume...\n")
+			fmt.Fprintf(os.Stderr, "\nReceived signal: %v\n", sig)
+			fmt.Fprintf(os.Stderr, "Cleaning up and locking volume...\n")
 			cleanup()
 			os.Exit(1)
 		case <-done:
@@ -57,27 +57,27 @@ func createShutdownCleanup(volumePath, containerName string) func() {
 	return func() {
 		volumeManager, err := volume.New()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[shutdown] Warning: could not create volume manager: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: could not create volume manager: %v\n", err)
 			return
 		}
 
 		// Stop container if running
 		dockerManager := docker.NewManager()
 		if dockerManager.IsRunning(containerName) {
-			fmt.Fprintf(os.Stderr, "[shutdown] Stopping container %s...\n", containerName)
+			fmt.Fprintf(os.Stderr, "Stopping container %s...\n", containerName)
 			if err := dockerManager.Stop(containerName); err != nil {
-				fmt.Fprintf(os.Stderr, "[shutdown] Warning: failed to stop container: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Warning: failed to stop container: %v\n", err)
 			}
 		}
 
 		// Get the mount point for this specific volume (not any volume)
 		mountPoint := volumeManager.GetMountPoint(volumePath)
 		if mountPoint != "" {
-			fmt.Fprintf(os.Stderr, "[shutdown] Locking volume at %s...\n", mountPoint)
+			fmt.Fprintf(os.Stderr, "Locking volume at %s...\n", mountPoint)
 			if err := volumeManager.Unmount(mountPoint); err != nil {
-				fmt.Fprintf(os.Stderr, "[shutdown] Warning: failed to unmount volume: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Warning: failed to unmount volume: %v\n", err)
 			} else {
-				fmt.Fprintf(os.Stderr, "[shutdown] Volume locked successfully.\n")
+				fmt.Fprintf(os.Stderr, "Volume locked successfully.\n")
 			}
 		}
 	}
@@ -366,7 +366,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Println("Preparing Docker mount...")
 	if err := dockerManager.RefreshMountCache(mountPoint); err != nil {
 		// Non-fatal: if refresh fails, the actual mount will report a clearer error
-		fmt.Fprintf(os.Stderr, "[warning] Cache refresh failed (will retry on mount): %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: cache refresh failed (will retry on mount): %v\n", err)
 	}
 
 	// Start container with retry on Docker mount cache errors

@@ -81,43 +81,36 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 	}
 
 	// Verify the directory structure was created by reading it back
-	fmt.Fprintf(os.Stderr, "[bootstrap] Verifying directory structure...\n")
 	homeClaudeDir := filepath.Join(mountPoint, "home", ".claude")
-	if entries, err := os.ReadDir(homeClaudeDir); err != nil {
+	if _, err := os.ReadDir(homeClaudeDir); err != nil {
 		_ = m.Unmount(mountPoint)
 		return fmt.Errorf("verification failed - cannot read home/.claude: %w", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "[bootstrap] Verified home/.claude exists with %d entries\n", len(entries))
 	}
 
 	// Sync filesystem before unmount
-	// 1. Sync the specific file we care about using fsync
-	fmt.Fprintf(os.Stderr, "[bootstrap] Syncing CLAUDE.md to disk...\n")
 	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
 	if f, err := os.OpenFile(claudeMDPath, os.O_RDONLY, 0); err == nil {
 		if err := f.Sync(); err != nil {
-			fmt.Fprintf(os.Stderr, "[bootstrap] Warning: fsync failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: fsync failed: %v\n", err)
 		}
 		f.Close()
 	}
 
-	// 2. Sync the parent directory
+	// Sync the parent directory
 	if d, err := os.Open(filepath.Join(mountPoint, "home", ".claude")); err == nil {
 		_ = d.Sync()
 		d.Close()
 	}
 
-	// 3. System-wide sync
-	fmt.Fprintf(os.Stderr, "[bootstrap] Running system sync...\n")
+	// System-wide sync
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer syncCancel()
 	syncCmd := exec.CommandContext(syncCtx, "/bin/sync")
 	if err := syncCmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "[bootstrap] Warning: sync failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: sync failed: %v\n", err)
 	}
 
 	// Additional delay to ensure sparse image is fully written
-	fmt.Fprintf(os.Stderr, "[bootstrap] Waiting for sparse image flush...\n")
 	time.Sleep(2 * time.Second)
 
 	// Unmount the volume
@@ -129,7 +122,6 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 	time.Sleep(1 * time.Second)
 
 	// Remount and verify data persisted to the sparse image
-	fmt.Fprintf(os.Stderr, "[bootstrap] Verifying data persistence by remounting...\n")
 	verifyMountPoint, err := m.Mount(volumePath, cfg.Password)
 	if err != nil {
 		return fmt.Errorf("failed to remount volume for verification: %w", err)
@@ -141,7 +133,6 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 		_ = m.Unmount(verifyMountPoint)
 		return fmt.Errorf("verification failed - CLAUDE.md not persisted to sparse image: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "[bootstrap] Verified CLAUDE.md persisted successfully\n")
 
 	// Final unmount
 	if err := m.Unmount(verifyMountPoint); err != nil {
@@ -152,11 +143,8 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 }
 
 func (m *MacOSVolumeManager) Mount(volumePath, password string) (string, error) {
-	fmt.Fprintf(os.Stderr, "[mount] Attempting to mount: %s\n", volumePath)
-
 	// Check if this specific volume is already mounted
 	if mountPoint := m.findMountPointForVolume(volumePath); mountPoint != "" {
-		fmt.Fprintf(os.Stderr, "[mount] Found existing mount at: %s\n", mountPoint)
 		return mountPoint, nil
 	}
 
@@ -193,17 +181,6 @@ func (m *MacOSVolumeManager) Mount(volumePath, password string) (string, error) 
 		return "", fmt.Errorf("failed to mount volume: %w: %s", err, string(output))
 	}
 
-	fmt.Fprintf(os.Stderr, "[mount] Successfully mounted at: %s\n", mountPoint)
-
-	// Debug: list contents of mounted volume
-	if entries, err := os.ReadDir(mountPoint); err == nil {
-		fmt.Fprintf(os.Stderr, "[mount] Volume contents: ")
-		for _, e := range entries {
-			fmt.Fprintf(os.Stderr, "%s ", e.Name())
-		}
-		fmt.Fprintf(os.Stderr, "\n")
-	}
-
 	return mountPoint, nil
 }
 
@@ -229,15 +206,12 @@ func (m *MacOSVolumeManager) Unmount(mountPoint string) error {
 	// Use shorter timeout for unmount operations
 	unmountTimeout := 30 * time.Second
 
-	// First, try diskutil unmount which forces a sync before unmounting
-	fmt.Fprintf(os.Stderr, "[unmount] Syncing and unmounting via diskutil...\n")
+	// Try diskutil unmount first (cleaner, forces sync)
 	diskutilCtx, diskutilCancel := context.WithTimeout(context.Background(), unmountTimeout)
 	defer diskutilCancel()
 
 	diskutilCmd := exec.CommandContext(diskutilCtx, "diskutil", "unmount", mountPoint)
-	if err := diskutilCmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "[unmount] diskutil unmount failed (will try hdiutil): %v\n", err)
-	} else {
+	if err := diskutilCmd.Run(); err == nil {
 		// diskutil unmount succeeded, clean up mount point directory
 		if strings.HasPrefix(mountPoint, mountPointPrefix) {
 			os.Remove(mountPoint)
@@ -301,24 +275,18 @@ func (m *MacOSVolumeManager) GetVolumePath(baseDir string) string {
 
 // createDirectoryStructure creates the required directories inside the mounted volume.
 func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, contextFiles []string) error {
-	fmt.Fprintf(os.Stderr, "[bootstrap] Creating directory structure in %s\n", mountPoint)
-
 	for _, dir := range config.VolumeStructure {
 		path := filepath.Join(mountPoint, dir)
-		fmt.Fprintf(os.Stderr, "[bootstrap] Creating directory: %s\n", path)
 		if err := os.MkdirAll(path, constants.DirPermissions); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
 
 	// Write the bootstrap CLAUDE.md file for Claude Code context
-	// Start with base template and append any context files
 	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
-	fmt.Fprintf(os.Stderr, "[bootstrap] Writing CLAUDE.md to %s\n", claudeMDPath)
 	claudeMDContent := embedded.ClaudeMDTemplate
 	for _, ctxFile := range contextFiles {
 		if extraContent, err := os.ReadFile(ctxFile); err == nil {
-			fmt.Fprintf(os.Stderr, "[bootstrap] Appending context from %s\n", ctxFile)
 			claudeMDContent = claudeMDContent + "\n" + string(extraContent)
 		} else {
 			return fmt.Errorf("failed to read context file %s: %w", ctxFile, err)
@@ -328,7 +296,6 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, context
 		return fmt.Errorf("failed to write CLAUDE.md: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "[bootstrap] Directory structure created successfully\n")
 	return nil
 }
 
@@ -398,8 +365,10 @@ func (m *MacOSVolumeManager) findMountPointForVolume(volumePath string) string {
 			if len(parts) == 2 {
 				currentImagePath = strings.TrimSpace(parts[1])
 				// Check if this is our volume (compare absolute paths)
-				absCurrentPath, _ := filepath.Abs(currentImagePath)
-				foundOurImage = absCurrentPath == absVolumePath
+				absCurrentPath, err := filepath.Abs(currentImagePath)
+				if err == nil {
+					foundOurImage = absCurrentPath == absVolumePath
+				}
 			}
 		}
 
