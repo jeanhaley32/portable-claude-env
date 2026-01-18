@@ -195,10 +195,6 @@ func (m *MacOSVolumeManager) Exists(volumePath string) bool {
 	return err == nil
 }
 
-func (m *MacOSVolumeManager) GetVolumePath(baseDir string) string {
-	return filepath.Join(baseDir, constants.MacOSVolumeFile)
-}
-
 // createDirectoryStructure creates the required directories inside the mounted volume.
 func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, contextFiles []string) error {
 	for _, dir := range config.VolumeStructure {
