@@ -83,6 +83,28 @@ func createShutdownCleanup(volumePath, containerName string) func() {
 	}
 }
 
+// getContainerNameForCwd returns the container name and current working directory.
+// Returns (containerName, cwd, error).
+func getContainerNameForCwd() (string, string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	repoIdentifier := repo.NewIdentifier()
+	workspacePath, err := repoIdentifier.GetWorkspaceRoot(cwd)
+	if err != nil {
+		workspacePath = cwd
+	}
+
+	containerName, err := repoIdentifier.GetContainerName(workspacePath)
+	if err != nil {
+		return docker.DefaultContainerName, cwd, nil
+	}
+
+	return containerName, cwd, nil
+}
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "capsule",
@@ -123,11 +145,6 @@ func newBootstrapCmd() *cobra.Command {
 }
 
 func runBootstrap(cmd *cobra.Command, args []string) error {
-	// Check platform
-	if !platform.IsMacOS() {
-		return fmt.Errorf("bootstrap currently only supports macOS")
-	}
-
 	size, err := cmd.Flags().GetInt("size")
 	if err != nil {
 		return fmt.Errorf("invalid size flag: %w", err)
@@ -165,7 +182,7 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	// Create volume manager
 	volumeManager, err := volume.New()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
 
 	volumePath := volumeManager.GetVolumePath(absPath)
@@ -217,9 +234,8 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Volume created successfully!")
 	fmt.Println("")
-	fmt.Println("Next steps:")
-	fmt.Println("  1. Build the Docker image: capsule build-image")
-	fmt.Println("  2. Start the workspace: capsule start")
+	fmt.Println("Next step:")
+	fmt.Println("  capsule start")
 
 	return nil
 }
@@ -238,11 +254,6 @@ func newStartCmd() *cobra.Command {
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
-	// Check platform
-	if !platform.IsMacOS() {
-		return fmt.Errorf("start currently only supports macOS")
-	}
-
 	volumePathFlag, err := cmd.Flags().GetString("volume")
 	if err != nil {
 		return fmt.Errorf("invalid volume flag: %w", err)
@@ -252,10 +263,16 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid workspace flag: %w", err)
 	}
 
+	// Get current directory once for reuse
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
 	// Create managers
 	volumeManager, err := volume.New()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
 	dockerManager := docker.NewManager()
 	repoIdentifier := repo.NewIdentifier()
@@ -263,11 +280,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// Find volume path
 	volumePath := volumePathFlag
 	if volumePath == "" {
-		// Look in current directory
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
 		volumePath = volumeManager.GetVolumePath(cwd)
 		if !volumeManager.Exists(volumePath) {
 			return fmt.Errorf("volume not found at %s. Run 'capsule bootstrap' first or specify --volume", volumePath)
@@ -277,10 +289,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// Determine workspace
 	workspacePath := workspaceFlag
 	if workspacePath == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
 		workspacePath, err = repoIdentifier.GetWorkspaceRoot(cwd)
 		if err != nil {
 			return fmt.Errorf("failed to determine workspace root: %w", err)
@@ -302,13 +310,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate container name: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "[start] Using container name: %s\n", containerName)
-
-	// Prompt for password
-	password, err := terminal.ReadPassword("Enter volume password: ")
-	if err != nil {
-		return fmt.Errorf("password error: %w", err)
-	}
 
 	// Check if Docker image exists, build if needed
 	if !embedded.ImageExists(docker.DefaultImageName) {
@@ -322,30 +323,30 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// Verify Docker Desktop can access /tmp for encrypted volume mounts
 	fmt.Println("Checking Docker file sharing configuration...")
 	if err := dockerManager.CheckTmpFileSharing(); err != nil {
-		return err
+		return fmt.Errorf("Docker file sharing check failed: %w", err)
 	}
 
 	// Pre-start cleanup: remove any stale container from previous runs
 	// This prevents Docker mount conflicts even with stopped containers
-	// Use docker rm -f directly for reliable cleanup regardless of container state
 	fmt.Println("Checking for stale containers...")
-	cleanupCmd := exec.Command("docker", "rm", "-f", containerName)
-	cleanupOutput, cleanupErr := cleanupCmd.CombinedOutput()
-	if cleanupErr != nil {
-		fmt.Fprintf(os.Stderr, "[pre-start] No container to remove (or error): %s\n", strings.TrimSpace(string(cleanupOutput)))
-	} else {
-		fmt.Fprintf(os.Stderr, "[pre-start] Removed stale container: %s\n", strings.TrimSpace(string(cleanupOutput)))
-		// Give Docker time to release mount references
-		fmt.Fprintf(os.Stderr, "[pre-start] Waiting for Docker to release mount references...\n")
+	if err := dockerManager.RemoveContainer(containerName); err == nil {
+		fmt.Println("Removed stale container.")
 		time.Sleep(docker.MountReleaseDelay)
 	}
 
 	// Check if volume is already mounted (reuse existing mount for fast re-entry)
 	var mountPoint string
+	var password string
 	if existingMount := volumeManager.GetMountPoint(volumePath); existingMount != "" {
 		fmt.Printf("Volume already mounted at %s\n", existingMount)
 		mountPoint = existingMount
 	} else {
+		// Prompt for password only when we need to mount
+		password, err = terminal.ReadPassword("Enter volume password: ")
+		if err != nil {
+			return fmt.Errorf("password error: %w", err)
+		}
+
 		// Mount volume
 		fmt.Println("Mounting encrypted volume...")
 		mountPoint, err = volumeManager.Mount(volumePath, password)
@@ -383,19 +384,26 @@ func runStart(cmd *cobra.Command, args []string) error {
 		fmt.Println("Docker mount cache conflict detected, cleaning up...")
 
 		// Remove any partial container (errors ignored - container may not exist)
-		retryCleanupCmd := exec.Command("docker", "rm", "-f", containerName)
-		if err := retryCleanupCmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "[cleanup] Container removal: %v\n", err)
+		if err := dockerManager.RemoveContainer(containerName); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: container removal failed: %v\n", err)
 		}
 
 		// Unmount and remove mount directory (Unmount now handles directory cleanup)
 		if err := volumeManager.Unmount(mountPoint); err != nil {
-			fmt.Fprintf(os.Stderr, "[cleanup] Volume unmount: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: volume unmount failed: %v\n", err)
 		}
 
 		// Wait for Docker Desktop to clear its cache
 		fmt.Println("Waiting for Docker to refresh...")
 		time.Sleep(docker.CacheRefreshDelay)
+
+		// If we didn't have a password (volume was pre-mounted), prompt now
+		if password == "" {
+			password, err = terminal.ReadPassword("Enter volume password to remount: ")
+			if err != nil {
+				return fmt.Errorf("password error: %w", err)
+			}
+		}
 
 		// Remount
 		fmt.Println("Remounting volume...")
@@ -414,14 +422,13 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	if startErr != nil {
 		// Clean up any partially created container before returning error
-		fmt.Fprintf(os.Stderr, "[error] Cleaning up failed container...\n")
-		failCleanupCmd := exec.Command("docker", "rm", "-f", containerName)
-		if err := failCleanupCmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "[cleanup] Container removal: %v\n", err)
+		fmt.Println("Cleaning up failed container...")
+		if err := dockerManager.RemoveContainer(containerName); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: container removal failed: %v\n", err)
 		}
 
 		if unmountErr := volumeManager.Unmount(mountPoint); unmountErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: cleanup failed to unmount volume: %v\n", unmountErr)
+			fmt.Fprintf(os.Stderr, "Warning: volume unmount failed: %v\n", unmountErr)
 		}
 		return fmt.Errorf("failed to start container: %w", startErr)
 	}
@@ -507,11 +514,6 @@ Password can be provided via:
 }
 
 func runUnlock(cmd *cobra.Command, args []string) error {
-	// Check platform
-	if !platform.IsMacOS() {
-		return fmt.Errorf("unlock currently only supports macOS")
-	}
-
 	volumePathFlag, err := cmd.Flags().GetString("volume")
 	if err != nil {
 		return fmt.Errorf("invalid volume flag: %w", err)
@@ -524,7 +526,7 @@ func runUnlock(cmd *cobra.Command, args []string) error {
 	// Create volume manager
 	volumeManager, err := volume.New()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
 
 	// Find volume path
@@ -587,28 +589,19 @@ Output is in KEY=VALUE format for easy parsing:
 }
 
 func runLock(cmd *cobra.Command, args []string) error {
+	// Get container name and cwd for current directory
+	containerName, cwd, err := getContainerNameForCwd()
+	if err != nil {
+		return err
+	}
+
 	// Create volume manager
 	volumeManager, err := volume.New()
 	if err != nil {
 		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
 
-	// Find volume path and container name for current directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
-	}
 	volumePath := volumeManager.GetVolumePath(cwd)
-
-	repoIdentifier := repo.NewIdentifier()
-	workspacePath, err := repoIdentifier.GetWorkspaceRoot(cwd)
-	if err != nil {
-		workspacePath = cwd
-	}
-	containerName, err := repoIdentifier.GetContainerName(workspacePath)
-	if err != nil {
-		containerName = docker.DefaultContainerName // Fallback
-	}
 
 	// Get the mount point for this specific volume (not any volume)
 	mountPoint := volumeManager.GetMountPoint(volumePath)
@@ -644,19 +637,9 @@ func runLock(cmd *cobra.Command, args []string) error {
 
 func runStop(cmd *cobra.Command, args []string) error {
 	// Get container name for current directory
-	cwd, err := os.Getwd()
+	containerName, _, err := getContainerNameForCwd()
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
-	}
-
-	repoIdentifier := repo.NewIdentifier()
-	workspacePath, err := repoIdentifier.GetWorkspaceRoot(cwd)
-	if err != nil {
-		workspacePath = cwd
-	}
-	containerName, err := repoIdentifier.GetContainerName(workspacePath)
-	if err != nil {
-		containerName = docker.DefaultContainerName // Fallback
+		return err
 	}
 
 	dockerManager := docker.NewManager()
@@ -692,11 +675,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid volume flag: %w", err)
 	}
 
-	// Determine paths
-	cwd, err := os.Getwd()
+	// Get container name and cwd for current directory
+	containerName, cwd, err := getContainerNameForCwd()
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
+
 	volumeManager, err := volume.New()
 	if err != nil {
 		return fmt.Errorf("failed to create volume manager: %w", err)
@@ -705,17 +689,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	volumePath := volumePathFlag
 	if volumePath == "" {
 		volumePath = volumeManager.GetVolumePath(cwd)
-	}
-
-	// Get container name for current directory
-	repoIdentifier := repo.NewIdentifier()
-	workspacePath, err := repoIdentifier.GetWorkspaceRoot(cwd)
-	if err != nil {
-		workspacePath = cwd
-	}
-	containerName, err := repoIdentifier.GetContainerName(workspacePath)
-	if err != nil {
-		containerName = docker.DefaultContainerName // Fallback
 	}
 
 	// Create detector

@@ -66,7 +66,7 @@ func (m *Manager) Start(config ContainerConfig) error {
 			return nil
 		}
 		// Exists but not running, remove it
-		if err := m.removeContainer(config.ContainerName); err != nil {
+		if err := m.RemoveContainer(config.ContainerName); err != nil {
 			return fmt.Errorf("failed to remove existing container: %w", err)
 		}
 	}
@@ -138,7 +138,7 @@ func (m *Manager) Stop(containerName string) error {
 	}
 
 	// Remove container
-	return m.removeContainer(containerName)
+	return m.RemoveContainer(containerName)
 }
 
 func (m *Manager) IsRunning(containerName string) bool {
@@ -330,7 +330,7 @@ func (m *Manager) containerExists(containerName string) bool {
 	return len(strings.TrimSpace(string(output))) > 0
 }
 
-// removeContainer removes a container.
-func (m *Manager) removeContainer(containerName string) error {
+// RemoveContainer forcibly removes a container (running or stopped).
+func (m *Manager) RemoveContainer(containerName string) error {
 	return m.runCommandWithTimeout(defaultCommandTimeout, "docker", "rm", "-f", containerName)
 }
