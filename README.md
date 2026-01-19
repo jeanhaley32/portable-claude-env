@@ -2,41 +2,17 @@
 
 A secure, portable workspace for AI-assisted development—isolating your code, your credentials, and your context.
 
-## Why Capsule Exists
+## What It Does
 
-AI coding assistants introduce challenges that traditional development tools weren't built to address.
+Capsule runs Claude Code inside a Docker container. The container can only see two things: your current project and its own encrypted home directory.
 
-### The security question we can't fully answer yet
+Your host machine—SSH keys, cloud credentials, other projects—is invisible. Credentials you set up inside the container persist in the encrypted volume and travel with it.
 
-Large language models are a new paradigm. Their attack surface is still being mapped. A model could unknowingly execute harmful patterns—through poisoned training data, adversarial prompts hidden in documentation, or supply chain attacks in suggested dependencies.
+## Workspace Organization
 
-Without containment, a single bad action has access to everything:
+Working with an LLM generates artifacts: planning docs, architecture notes, task logs. The encrypted volume gives these a home outside your git history. Each project gets a `_docs/` directory that persists across sessions.
 
-```
-~/.ssh/           ← SSH keys (GitHub, servers)
-~/.aws/           ← AWS credentials
-~/.config/        ← Application secrets
-~/Projects/       ← All your other projects
-~/.bash_history   ← Command history with passwords
-```
-
-Capsule's position: *we don't know what we don't know, so contain first.*
-
-### The mess that LLM workflows create
-
-Working effectively with a language model means building context: planning documents, architecture notes, progress logs, decision records. These artifacts are essential for continuity—but they don't belong in your git history, and they clutter your working directory.
-
-Capsule's solution: *separate code from context, keep both organized.*
-
-### What Capsule provides
-
-| Capability | What it means |
-|------------|---------------|
-| **Filesystem isolation** | The model sees only your current project and its own home directory. Everything else doesn't exist. |
-| **Encrypted storage** | Credentials and working context live in an AES-256 encrypted volume. Locked when not in use. |
-| **Shadow documentation** | Each project gets a `_docs/` directory outside git that persists across sessions. |
-| **Portable workspace** | The encrypted volume moves between machines. Your context travels with you. |
-| **Clean boundaries** | Delete the volume, delete everything. One action, clean slate. |
+Delete the volume, delete everything. Move it to another machine, your context comes with you.
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -46,18 +22,21 @@ Capsule's solution: *separate code from context, keep both organized.*
 │  ~/other-projects/            ← Not visible        │
 │                                                     │
 │  ~/.capsule/volumes/capsule.sparseimage            │
-│  └── Encrypted workspace (portable, deletable)     │
 └─────────────────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────┐
-│ Container (what the model sees)                     │
+│ Container                                           │
 │                                                     │
-│  /workspace/         Your project                  │
-│  /workspace/_docs/   Planning notes, context       │
-│  $HOME/              Capsule-scoped credentials    │
+│  /workspace/        ← Your project                 │
+│  /workspace/_docs/  → symlink to repos/<project>/  │
 │                                                     │
-│  Everything else: doesn't exist                    │
+│  /claude-env/       ← Encrypted volume mount       │
+│  ├── home/          ← $HOME                        │
+│  │   └── .claude/   ← Claude Code credentials      │
+│  ├── repos/         ← Shadow docs per project      │
+│  └── auth/          ← API keys                     │
+│                                                     │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -196,7 +175,7 @@ Use this for:
 - Progress logs and decision records
 - Context that shouldn't live in git
 
-The symlink exists only inside the container and is automatically gitignored.
+The symlink is created inside the container. Add `_docs` to your `.gitignore` to keep it out of version control.
 
 ## Scripting & Automation
 
