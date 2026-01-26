@@ -81,7 +81,7 @@ func (m *MacOSVolumeManager) Bootstrap(cfg BootstrapConfig) error {
 	}
 
 	// Create directory structure
-	if err := m.createDirectoryStructure(mountPoint, cfg.ContextFiles); err != nil {
+	if err := m.createDirectoryStructure(mountPoint, cfg); err != nil {
 		// Try to unmount even if directory creation fails
 		_ = m.Unmount(mountPoint)
 		return fmt.Errorf("failed to create directory structure: %w", err)
@@ -196,7 +196,7 @@ func (m *MacOSVolumeManager) Exists(volumePath string) bool {
 }
 
 // createDirectoryStructure creates the required directories inside the mounted volume.
-func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, contextFiles []string) error {
+func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, cfg BootstrapConfig) error {
 	for _, dir := range config.VolumeStructure {
 		path := filepath.Join(mountPoint, dir)
 		if err := os.MkdirAll(path, constants.DirPermissions); err != nil {
@@ -204,18 +204,37 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, context
 		}
 	}
 
-	// Write the bootstrap CLAUDE.md file for Claude Code context
-	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
+	// Build CLAUDE.md content
 	claudeMDContent := embedded.ClaudeMDTemplate
-	for _, ctxFile := range contextFiles {
+
+	// Append context files
+	for _, ctxFile := range cfg.ContextFiles {
 		if extraContent, err := os.ReadFile(ctxFile); err == nil {
 			claudeMDContent = claudeMDContent + "\n" + string(extraContent)
 		} else {
 			return fmt.Errorf("failed to read context file %s: %w", ctxFile, err)
 		}
 	}
+
+	// Append memory protocol docs if enabled
+	if cfg.WithMemory {
+		claudeMDContent = claudeMDContent + embedded.MemoryProtocolDocs
+	}
+
+	// Write CLAUDE.md
+	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
 	if err := os.WriteFile(claudeMDPath, []byte(claudeMDContent), constants.FilePermissions); err != nil {
 		return fmt.Errorf("failed to write CLAUDE.md: %w", err)
+	}
+
+	// Install doc-sync skill if memory is enabled
+	if cfg.WithMemory {
+		if err := embedded.WriteDocSyncFiles(mountPoint); err != nil {
+			return fmt.Errorf("failed to install doc-sync: %w", err)
+		}
+		if err := embedded.WriteSettingsJSON(mountPoint); err != nil {
+			return fmt.Errorf("failed to write settings.json: %w", err)
+		}
 	}
 
 	return nil

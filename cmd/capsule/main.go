@@ -142,6 +142,7 @@ func newBootstrapCmd() *cobra.Command {
 	cmd.Flags().Bool("local", false, "Create volume in current directory")
 	cmd.Flags().Bool("global", false, "Create volume in ~/.capsule/volumes/ (default)")
 	cmd.Flags().StringSlice("context", []string{}, "Markdown files to extend Claude context (can be specified multiple times)")
+	cmd.Flags().Bool("with-memory", false, "Install doc-sync skill with SQLite memory system")
 
 	return cmd
 }
@@ -170,6 +171,10 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	contextFiles, err := cmd.Flags().GetStringSlice("context")
 	if err != nil {
 		return fmt.Errorf("invalid context flag: %w", err)
+	}
+	withMemory, err := cmd.Flags().GetBool("with-memory")
+	if err != nil {
+		return fmt.Errorf("invalid with-memory flag: %w", err)
 	}
 
 	// Convert context files to absolute paths
@@ -258,7 +263,7 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 
 	// Check if volume already exists
 	if volumeManager.Exists(volumePath) {
-		return fmt.Errorf("volume already exists at %s", volumePath)
+		return fmt.Errorf("already bootstrapped: volume exists at %s\nUse 'capsule start' to begin a session", volumePath)
 	}
 
 	// Prompt for password
@@ -279,6 +284,7 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 		SizeGB:       size,
 		Password:     password,
 		ContextFiles: contextFiles,
+		WithMemory:   withMemory,
 	}
 
 	if err := volumeManager.Bootstrap(cfg); err != nil {
