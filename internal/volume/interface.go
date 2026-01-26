@@ -14,6 +14,7 @@ type BootstrapConfig struct {
 	Password     *terminal.SecurePassword
 	ContextFiles []string // Markdown files to extend Claude context
 	WithMemory   bool     // Install doc-sync skill with SQLite memory system
+	Version      string   // Capsule version for tracking installed components
 }
 
 // Validate checks that the bootstrap configuration is valid.

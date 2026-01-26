@@ -38,4 +38,10 @@ const (
 
 	// FilePermissions is the default permission mode for sensitive files.
 	FilePermissions os.FileMode = 0600
+
+	// ExecutablePermissions is the permission mode for executable scripts.
+	ExecutablePermissions os.FileMode = 0755
+
+	// PublicFilePermissions is the permission mode for non-sensitive, readable files.
+	PublicFilePermissions os.FileMode = 0644
 )

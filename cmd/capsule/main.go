@@ -285,6 +285,7 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 		Password:     password,
 		ContextFiles: contextFiles,
 		WithMemory:   withMemory,
+		Version:      version,
 	}
 
 	if err := volumeManager.Bootstrap(cfg); err != nil {

@@ -15,7 +15,6 @@ RUN apt-get update && apt-get install -y \
     fontconfig \
     unzip \
     python3 \
-    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Nerd Font (FiraCode)
@@ -68,7 +67,9 @@ echo "Symlink created: $LINK -> $TARGET"
 DOCTOOL="/claude-env/home/.claude/skills/doc-sync/doctool.py"
 if [ -f "$DOCTOOL" ]; then
     echo "Initializing memory database..."
-    python3 "$DOCTOOL" index init || echo "Warning: database init failed (may already exist)"
+    if ! python3 "$DOCTOOL" index init 2>&1; then
+        echo "Warning: database init returned non-zero (may already exist)"
+    fi
 fi
 SCRIPT
 RUN chmod +x /usr/local/bin/setup-workspace-symlink.sh

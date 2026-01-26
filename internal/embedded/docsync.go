@@ -2,9 +2,12 @@ package embedded
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/jeanhaley32/claude-capsule/internal/constants"
 )
 
 //go:embed docsync/doctool.py
@@ -112,13 +115,16 @@ const SettingsJSON = `{
 // DocSyncSkillDir is the path within the encrypted volume for doc-sync files.
 const DocSyncSkillDir = "home/.claude/skills/doc-sync"
 
+// VersionFile is the path within the encrypted volume for version tracking.
+const VersionFile = "home/.claude/VERSION"
+
 // WriteDocSyncFiles writes the doc-sync skill files to the mounted volume.
 // Files are written with executable permissions for Python scripts.
 func WriteDocSyncFiles(mountPoint string) error {
 	skillDir := filepath.Join(mountPoint, DocSyncSkillDir)
 
 	// Create the skill directory
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
+	if err := os.MkdirAll(skillDir, constants.DirPermissions); err != nil {
 		return fmt.Errorf("failed to create skill directory: %w", err)
 	}
 
@@ -128,10 +134,10 @@ func WriteDocSyncFiles(mountPoint string) error {
 		content []byte
 		perm    os.FileMode
 	}{
-		{"doctool.py", DoctoolPy, 0755},
-		{"mcp_server.py", MCPServerPy, 0755},
-		{"schema.sql", SchemaSql, 0644},
-		{"SKILL.md", SkillMd, 0644},
+		{"doctool.py", DoctoolPy, constants.ExecutablePermissions},
+		{"mcp_server.py", MCPServerPy, constants.ExecutablePermissions},
+		{"schema.sql", SchemaSql, constants.PublicFilePermissions},
+		{"SKILL.md", SkillMd, constants.PublicFilePermissions},
 	}
 
 	for _, f := range files {
@@ -145,18 +151,109 @@ func WriteDocSyncFiles(mountPoint string) error {
 }
 
 // WriteSettingsJSON writes the Claude Code settings.json to configure MCP servers.
-// This overwrites any existing settings.json (merge support deferred to future phase).
+// If settings.json already exists, merges our mcpServers config into it.
 func WriteSettingsJSON(mountPoint string) error {
 	claudeDir := filepath.Join(mountPoint, "home", ".claude")
 
 	// Ensure directory exists (should already from VolumeStructure)
-	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+	if err := os.MkdirAll(claudeDir, constants.DirPermissions); err != nil {
 		return fmt.Errorf("failed to create .claude directory: %w", err)
 	}
 
 	settingsPath := filepath.Join(claudeDir, "settings.json")
-	if err := os.WriteFile(settingsPath, []byte(SettingsJSON), 0644); err != nil {
+
+	// Start with our default config
+	var settings map[string]interface{}
+	if err := json.Unmarshal([]byte(SettingsJSON), &settings); err != nil {
+		return fmt.Errorf("failed to parse default settings: %w", err)
+	}
+
+	// If existing settings.json exists, merge into it
+	if existingData, err := os.ReadFile(settingsPath); err == nil {
+		var existing map[string]interface{}
+		if err := json.Unmarshal(existingData, &existing); err != nil {
+			return fmt.Errorf("failed to parse existing settings.json: %w", err)
+		}
+
+		// Merge: preserve existing, add our mcpServers.doc-sync
+		settings = mergeSettings(existing, settings)
+	}
+
+	// Write merged settings with indentation for readability
+	output, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal settings: %w", err)
+	}
+
+	if err := os.WriteFile(settingsPath, output, constants.PublicFilePermissions); err != nil {
 		return fmt.Errorf("failed to write settings.json: %w", err)
+	}
+
+	return nil
+}
+
+// mergeSettings deep merges src into dst, with src taking precedence for conflicts.
+// Specifically handles mcpServers as a nested map to preserve existing servers.
+func mergeSettings(dst, src map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// Copy all existing keys
+	for k, v := range dst {
+		result[k] = v
+	}
+
+	// Merge in source keys
+	for k, v := range src {
+		if k == "mcpServers" {
+			// Special handling: merge mcpServers maps
+			result[k] = mergeMCPServers(
+				toStringMap(dst[k]),
+				toStringMap(v),
+			)
+		} else {
+			// For other keys, src overwrites dst
+			result[k] = v
+		}
+	}
+
+	return result
+}
+
+// mergeMCPServers merges MCP server configurations, with src taking precedence.
+func mergeMCPServers(dst, src map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// Copy existing servers
+	for k, v := range dst {
+		result[k] = v
+	}
+
+	// Add/overwrite with new servers
+	for k, v := range src {
+		result[k] = v
+	}
+
+	return result
+}
+
+// toStringMap safely converts interface{} to map[string]interface{}.
+func toStringMap(v interface{}) map[string]interface{} {
+	if v == nil {
+		return make(map[string]interface{})
+	}
+	if m, ok := v.(map[string]interface{}); ok {
+		return m
+	}
+	return make(map[string]interface{})
+}
+
+// WriteVersionFile writes the capsule version to track installed components.
+func WriteVersionFile(mountPoint, version string) error {
+	versionPath := filepath.Join(mountPoint, VersionFile)
+
+	content := fmt.Sprintf("capsule %s\n", version)
+	if err := os.WriteFile(versionPath, []byte(content), constants.PublicFilePermissions); err != nil {
+		return fmt.Errorf("failed to write VERSION: %w", err)
 	}
 
 	return nil

@@ -233,7 +233,16 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, cfg Boo
 			return fmt.Errorf("failed to install doc-sync: %w", err)
 		}
 		if err := embedded.WriteSettingsJSON(mountPoint); err != nil {
-			return fmt.Errorf("failed to write settings.json: %w", err)
+			return fmt.Errorf(`failed to write settings.json: %w
+
+Recovery: Manually add to ~/.claude/settings.json inside the container:
+  "mcpServers": { "doc-sync": { "command": "python3", "args": ["/claude-env/home/.claude/skills/doc-sync/mcp_server.py"] } }
+Or delete the volume and re-run bootstrap.`, err)
+		}
+		if cfg.Version != "" {
+			if err := embedded.WriteVersionFile(mountPoint, cfg.Version); err != nil {
+				return fmt.Errorf("failed to write VERSION: %w", err)
+			}
 		}
 	}
 
