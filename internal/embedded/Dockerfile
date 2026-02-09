@@ -30,11 +30,18 @@ RUN curl -sS https://starship.rs/install.sh | sh -s -- -y
 # Install Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
+# Install Beads issue tracker
+RUN npm install -g @beads/bd
+
 # Create non-root user with sudo access
 RUN useradd -m -s /usr/bin/fish claude && \
     mkdir -p /claude-env /workspace && \
     chown -R claude:claude /claude-env /workspace && \
     echo "claude ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/claude
+
+# Global gitignore: ensure .beads never leaks into any repo
+RUN git config --system core.excludesFile /etc/gitignore-global && \
+    echo ".beads" >> /etc/gitignore-global
 
 # Set up volume mount points
 VOLUME ["/claude-env", "/workspace"]
@@ -70,6 +77,36 @@ if [ -f "$DOCTOOL" ]; then
     if ! python3 "$DOCTOOL" index init 2>&1; then
         echo "Warning: database init returned non-zero (may already exist)"
     fi
+fi
+
+# Initialize beads issue tracker if bd is installed
+if command -v bd >/dev/null 2>&1; then
+    BEADS_TARGET="/claude-env/repos/${REPO_ID}/.beads"
+    mkdir -p "$BEADS_TARGET"
+
+    # Write fish env config so BEADS_DIR is set in every shell
+    FISH_CONF_DIR="/claude-env/home/.config/fish/conf.d"
+    mkdir -p "$FISH_CONF_DIR"
+    cat > "$FISH_CONF_DIR/beads-env.fish" << FISHENV
+set -gx BEADS_DIR /claude-env/repos/${REPO_ID}/.beads
+FISHENV
+
+    export BEADS_DIR="$BEADS_TARGET"
+
+    # Initialize if not already done
+    if [ ! -f "$BEADS_TARGET/beads.db" ]; then
+        echo "Initializing beads issue tracker..."
+        if ! bd init --stealth --no-daemon 2>&1; then
+            echo "Warning: beads init returned non-zero"
+        fi
+    else
+        echo "Beads already initialized for this repo."
+    fi
+
+    # Configure beads for Claude Code integration (idempotent, safe every start)
+    bd setup claude 2>&1 || echo "Warning: bd setup claude returned non-zero"
+    bd config set beads.role maintainer 2>&1 || echo "Warning: bd config set role returned non-zero"
+    bd config set daemon.enabled false 2>&1 || echo "Warning: bd config set daemon returned non-zero"
 fi
 SCRIPT
 RUN chmod +x /usr/local/bin/setup-workspace-symlink.sh

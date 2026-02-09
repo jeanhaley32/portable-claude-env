@@ -34,7 +34,7 @@ Delete the volume, delete everything. Move it to another machine, your context c
 │  /claude-env/       ← Encrypted volume mount       │
 │  ├── home/          ← $HOME                        │
 │  │   └── .claude/   ← Claude Code credentials      │
-│  │       └── skills/← doc-sync (if --with-memory)  │
+│  │       └── skills/← doc-sync + memory system      │
 │  ├── repos/         ← Shadow docs + memory DB      │
 │  └── auth/          ← API keys                     │
 │                                                     │
@@ -78,7 +78,6 @@ You'll be prompted for:
 - `--volume PATH` — Explicit path
 - `--size N` — Volume size in GB
 - `--api-key KEY` — Store API key during setup
-- `--with-memory` — Install doc-sync skill with SQLite memory system
 
 ### 3. Start
 
@@ -181,13 +180,9 @@ The symlink is created inside the container. Add `_docs` to your `.gitignore` to
 
 ## Memory System
 
-Bootstrap with `--with-memory` to install the doc-sync skill—a SQLite-backed memory system that persists decisions, context, and learnings across sessions.
+Every bootstrapped volume includes the doc-sync skill—a SQLite-backed memory system that persists decisions, context, and learnings across sessions.
 
-```bash
-capsule bootstrap --global --with-memory
-```
-
-This installs:
+This includes:
 - **doc-sync skill** — Documentation lifecycle tooling and MCP server
 - **Memory database** — FTS5-powered search over stored memories
 - **MCP integration** — Claude Code can search and add memories natively
@@ -239,6 +234,7 @@ Pre-configured tools:
 | **fish** | Modern shell with syntax highlighting |
 | **Starship** | Cross-shell prompt (gruvbox-rainbow theme) |
 | **Claude Code** | Anthropic's AI coding assistant |
+| **Beads (bd)** | Local-first issue tracker (per-project, on encrypted volume) |
 | **gh** | GitHub CLI |
 | **git** | Version control |
 | **ripgrep** | Fast recursive search |

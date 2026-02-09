@@ -23,7 +23,7 @@ var SchemaSql []byte
 var SkillMd []byte
 
 // MemoryProtocolDocs contains the documentation for the memory retrieval system.
-// This is appended to CLAUDE.md when --with-memory is used.
+// This is appended to CLAUDE.md during bootstrap.
 const MemoryProtocolDocs = `
 ---
 
@@ -99,6 +99,49 @@ python3 ~/.claude/skills/doc-sync/doctool.py memory recent --days 30
 All return ` + "`age_days`" + ` and ` + "`is_stale`" + ` fields for programmatic staleness handling.
 
 This is not optional. Query before asking. Write before forgetting.
+`
+
+// BeadsProtocolDocs contains the documentation for the beads issue tracker.
+// This is appended to CLAUDE.md during bootstrap.
+const BeadsProtocolDocs = `
+---
+
+## Issue Tracking (Beads)
+
+The **Beads** issue tracker (` + "`bd`" + `) provides local-first, per-project issue tracking.
+All data lives on the encrypted volume — nothing is committed to git.
+
+### Commands
+
+` + "```bash" + `
+# List all open issues
+bd list
+
+# Create a new issue
+bd create "Short description of the issue"
+
+# Show details of a specific issue
+bd show <issue-id>
+
+# Close an issue
+bd close <issue-id>
+
+# Search issues by keyword
+bd search "keyword"
+` + "```" + `
+
+### Storage
+
+- Data location: ` + "`/claude-env/repos/<project>/.beads/`" + `
+- Per-project isolated — switching repos uses a separate database
+- Local-only on the encrypted volume — never touches git or GitHub
+- Persists across sessions, secured when the volume is locked
+
+### When to Use
+
+- Track bugs, tasks, and TODOs that span multiple sessions
+- Record issues discovered during code review or exploration
+- Maintain a backlog of work items for the current project
 `
 
 // SettingsJSON is the Claude Code settings.json that configures the MCP server.

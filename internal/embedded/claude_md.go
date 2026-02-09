@@ -30,7 +30,9 @@ This isolation is a security feature, not a limitation to work around.
 /claude-env/             <- Encrypted volume (your $HOME)
 ├── home/                <- Your home directory ($HOME=/claude-env/home)
 │   └── .claude/         <- Claude Code config and credentials
-├── repos/               <- Per-project shadow documentation storage
+├── repos/               <- Per-project storage
+│   └── <project>/
+│       └── .beads/      <- Issue tracker (per project)
 ├── auth/                <- API keys (if stored separately)
 └── config/              <- Additional configuration
 ` + "```" + `

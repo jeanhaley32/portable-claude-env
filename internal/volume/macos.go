@@ -216,10 +216,9 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, cfg Boo
 		}
 	}
 
-	// Append memory protocol docs if enabled
-	if cfg.WithMemory {
-		claudeMDContent = claudeMDContent + embedded.MemoryProtocolDocs
-	}
+	// Append memory protocol docs
+	claudeMDContent = claudeMDContent + embedded.MemoryProtocolDocs
+	claudeMDContent = claudeMDContent + embedded.BeadsProtocolDocs
 
 	// Write CLAUDE.md
 	claudeMDPath := filepath.Join(mountPoint, "home", ".claude", "CLAUDE.md")
@@ -227,22 +226,20 @@ func (m *MacOSVolumeManager) createDirectoryStructure(mountPoint string, cfg Boo
 		return fmt.Errorf("failed to write CLAUDE.md: %w", err)
 	}
 
-	// Install doc-sync skill if memory is enabled
-	if cfg.WithMemory {
-		if err := embedded.WriteDocSyncFiles(mountPoint); err != nil {
-			return fmt.Errorf("failed to install doc-sync: %w", err)
-		}
-		if err := embedded.WriteSettingsJSON(mountPoint); err != nil {
-			return fmt.Errorf(`failed to write settings.json: %w
+	// Install doc-sync skill and memory system
+	if err := embedded.WriteDocSyncFiles(mountPoint); err != nil {
+		return fmt.Errorf("failed to install doc-sync: %w", err)
+	}
+	if err := embedded.WriteSettingsJSON(mountPoint); err != nil {
+		return fmt.Errorf(`failed to write settings.json: %w
 
 Recovery: Manually add to ~/.claude/settings.json inside the container:
   "mcpServers": { "doc-sync": { "command": "python3", "args": ["/claude-env/home/.claude/skills/doc-sync/mcp_server.py"] } }
 Or delete the volume and re-run bootstrap.`, err)
-		}
-		if cfg.Version != "" {
-			if err := embedded.WriteVersionFile(mountPoint, cfg.Version); err != nil {
-				return fmt.Errorf("failed to write VERSION: %w", err)
-			}
+	}
+	if cfg.Version != "" {
+		if err := embedded.WriteVersionFile(mountPoint, cfg.Version); err != nil {
+			return fmt.Errorf("failed to write VERSION: %w", err)
 		}
 	}
 

@@ -142,7 +142,6 @@ func newBootstrapCmd() *cobra.Command {
 	cmd.Flags().Bool("local", false, "Create volume in current directory")
 	cmd.Flags().Bool("global", false, "Create volume in ~/.capsule/volumes/ (default)")
 	cmd.Flags().StringSlice("context", []string{}, "Markdown files to extend Claude context (can be specified multiple times)")
-	cmd.Flags().Bool("with-memory", false, "Install doc-sync skill with SQLite memory system")
 
 	return cmd
 }
@@ -172,11 +171,6 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid context flag: %w", err)
 	}
-	withMemory, err := cmd.Flags().GetBool("with-memory")
-	if err != nil {
-		return fmt.Errorf("invalid with-memory flag: %w", err)
-	}
-
 	// Convert context files to absolute paths
 	for i, ctxFile := range contextFiles {
 		if !filepath.IsAbs(ctxFile) {
@@ -284,7 +278,6 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 		SizeGB:       size,
 		Password:     password,
 		ContextFiles: contextFiles,
-		WithMemory:   withMemory,
 		Version:      version,
 	}
 
