@@ -84,19 +84,28 @@ if command -v bd >/dev/null 2>&1; then
     BEADS_TARGET="/claude-env/repos/${REPO_ID}/.beads"
     mkdir -p "$BEADS_TARGET"
 
-    # Write fish env config so BEADS_DIR is set in every shell
+    # Write fish env config so BEADS_DIR and daemon auto-start are set in every shell
     FISH_CONF_DIR="/claude-env/home/.config/fish/conf.d"
     mkdir -p "$FISH_CONF_DIR"
     cat > "$FISH_CONF_DIR/beads-env.fish" << FISHENV
 set -gx BEADS_DIR /claude-env/repos/${REPO_ID}/.beads
+set -gx BEADS_AUTO_START_DAEMON true
 FISHENV
 
     export BEADS_DIR="$BEADS_TARGET"
+    export BEADS_AUTO_START_DAEMON=true
+
+    # Write bash profile for non-fish shells
+    PROFILE="/claude-env/home/.profile"
+    if ! grep -q 'BEADS_DIR' "$PROFILE" 2>/dev/null; then
+        echo "export BEADS_DIR=/claude-env/repos/${REPO_ID}/.beads" >> "$PROFILE"
+        echo "export BEADS_AUTO_START_DAEMON=true" >> "$PROFILE"
+    fi
 
     # Initialize if not already done
     if [ ! -f "$BEADS_TARGET/beads.db" ]; then
         echo "Initializing beads issue tracker..."
-        if ! bd init --stealth --no-daemon 2>&1; then
+        if ! bd init --stealth 2>&1; then
             echo "Warning: beads init returned non-zero"
         fi
     else
@@ -106,7 +115,10 @@ FISHENV
     # Configure beads for Claude Code integration (idempotent, safe every start)
     bd setup claude 2>&1 || echo "Warning: bd setup claude returned non-zero"
     bd config set beads.role maintainer 2>&1 || echo "Warning: bd config set role returned non-zero"
-    bd config set daemon.enabled false 2>&1 || echo "Warning: bd config set daemon returned non-zero"
+    bd config set daemon.enabled true 2>&1 || echo "Warning: bd config set daemon returned non-zero"
+
+    # Start the daemon to keep JSONL and SQLite in sync
+    bd daemon start 2>&1 || echo "Warning: bd daemon start returned non-zero"
 fi
 SCRIPT
 RUN chmod +x /usr/local/bin/setup-workspace-symlink.sh
@@ -157,6 +169,7 @@ USER claude
 # Environment variables
 ENV CLAUDE_ENV_PATH=/claude-env
 ENV ANTHROPIC_API_KEY_FILE=/claude-env/auth/api-key
+ENV BEADS_AUTO_START_DAEMON=true
 ENV SHELL=/usr/bin/fish
 
 # Entry point
