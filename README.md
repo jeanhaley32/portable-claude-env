@@ -126,6 +126,7 @@ Unmounts the encrypted volume, securing your credentials. Next `start` requires 
 |---------|-------------|
 | `bootstrap` | Create encrypted workspace |
 | `start` | Mount, start container, enter shell |
+| `code` | Mount, start container, open VS Code attached to it |
 | `stop` | Stop container (keeps volume mounted) |
 | `unlock` | Mount volume without starting container |
 | `lock` | Unmount volume and secure credentials |
@@ -177,6 +178,38 @@ Use this for:
 - Context that shouldn't live in git
 
 The symlink is created inside the container. Add `_docs` to your `.gitignore` to keep it out of version control.
+
+## VS Code
+
+Edit inside the capsule from your host GUI VS Code using the Dev Containers
+**"Attach to Running Container"** feature—no SSH server, no exposed ports.
+
+```bash
+cd ~/projects/my-app
+capsule code        # mount volume, start container, open VS Code attached to /workspace
+```
+
+`capsule code` ensures the volume is mounted and the container is running, then
+launches VS Code already attached. Integrated terminals you open in VS Code run
+*inside* the container (fish), and VS Code's server installs onto the encrypted
+volume (`HOME=/claude-env/home`), so your extensions and settings persist across
+sessions and travel with the capsule.
+
+Unlike `capsule start`, this command returns immediately and leaves the
+container running. Closing or quitting VS Code does **not** stop the container.
+When you're done:
+
+```bash
+capsule stop        # stop container (keeps volume mounted)
+capsule lock        # stop container and unmount/secure the volume
+```
+
+**Requirements:**
+- The [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension (`ms-vscode-remote.remote-containers`) in your host VS Code.
+- The `code` CLI on your PATH (in VS Code: command palette → "Shell Command: Install 'code' command in PATH").
+
+**Flags:**
+- `--editor NAME` — launch a different editor CLI: `code` (default), `code-insiders`, `cursor`, or `windsurf`.
 
 ## Memory System
 

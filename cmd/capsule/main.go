@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -115,6 +116,7 @@ func main() {
 	rootCmd.AddCommand(
 		newBootstrapCmd(),
 		newStartCmd(),
+		newCodeCmd(),
 		newStopCmd(),
 		newUnlockCmd(),
 		newLockCmd(),
@@ -310,6 +312,65 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// resolvedTarget holds the resolved identity and paths for a session.
+type resolvedTarget struct {
+	volumePath    string
+	workspacePath string
+	repoID        string
+	containerName string
+}
+
+// resolveTarget resolves the volume path, workspace root, repo ID, and container
+// name for the current directory, honoring the optional --volume / --workspace
+// flag overrides. Shared by `start` and `code`.
+func resolveTarget(volumePathFlag, workspaceFlag string) (*resolvedTarget, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	repoIdentifier := repo.NewIdentifier()
+
+	pathResolver, err := volume.NewPathResolver()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create path resolver: %w", err)
+	}
+
+	volumePath, err := pathResolver.ResolveVolumePathStrict(volumePathFlag, cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	workspacePath := workspaceFlag
+	if workspacePath == "" {
+		workspacePath, err = repoIdentifier.GetWorkspaceRoot(cwd)
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine workspace root: %w", err)
+		}
+	}
+	workspacePath, err = filepath.Abs(workspacePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve workspace path: %w", err)
+	}
+
+	repoID, err := repoIdentifier.GetRepoID(workspacePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to identify repository: %w", err)
+	}
+
+	containerName, err := repoIdentifier.GetContainerName(workspacePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate container name: %w", err)
+	}
+
+	return &resolvedTarget{
+		volumePath:    volumePath,
+		workspacePath: workspacePath,
+		repoID:        repoID,
+		containerName: containerName,
+	}, nil
+}
+
 func newStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start",
@@ -333,10 +394,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid workspace flag: %w", err)
 	}
 
-	// Get current directory once for reuse
-	cwd, err := os.Getwd()
+	// Resolve volume, workspace, repo ID, and container name
+	target, err := resolveTarget(volumePathFlag, workspaceFlag)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
 
 	// Create managers
@@ -345,50 +406,37 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create volume manager: %w", err)
 	}
 	dockerManager := docker.NewManager()
-	repoIdentifier := repo.NewIdentifier()
 
-	// Create path resolver
-	pathResolver, err := volume.NewPathResolver()
-	if err != nil {
-		return fmt.Errorf("failed to create path resolver: %w", err)
-	}
-
-	// Find volume path using priority rules
-	volumePath, err := pathResolver.ResolveVolumePathStrict(volumePathFlag, cwd)
+	// Bring up the container (build image, mount volume, start, setup symlink).
+	containerConfig, password, cancelShutdown, err := ensureContainerRunning(dockerManager, volumeManager, target)
 	if err != nil {
 		return err
 	}
-
-	// Determine workspace
-	workspacePath := workspaceFlag
-	if workspacePath == "" {
-		workspacePath, err = repoIdentifier.GetWorkspaceRoot(cwd)
-		if err != nil {
-			return fmt.Errorf("failed to determine workspace root: %w", err)
-		}
+	if password != nil {
+		defer password.Clear()
 	}
-	workspacePath, err = filepath.Abs(workspacePath)
-	if err != nil {
-		return fmt.Errorf("failed to resolve workspace path: %w", err)
-	}
+	defer cancelShutdown()
 
-	// Get repo ID for symlink and container name
-	repoID, err := repoIdentifier.GetRepoID(workspacePath)
-	if err != nil {
-		return fmt.Errorf("failed to identify repository: %w", err)
-	}
+	// Enter container shell (execs shell, cleans up on exit)
+	return enterContainerShell(dockerManager, containerConfig)
+}
 
-	// Get unique container name for this workspace
-	containerName, err := repoIdentifier.GetContainerName(workspacePath)
-	if err != nil {
-		return fmt.Errorf("failed to generate container name: %w", err)
-	}
-
+// ensureContainerRunning builds the image if needed, mounts the encrypted
+// volume, starts the workspace container (retrying on VirtioFS cache
+// conflicts), and sets up the _docs symlink. It arms a shutdown handler that
+// locks the volume if the process is interrupted; the returned cancelShutdown
+// func unregisters it and MUST be deferred by the caller. The returned password
+// is nil when an existing mount was reused; otherwise the caller owns clearing it.
+func ensureContainerRunning(
+	dockerManager docker.DockerManager,
+	volumeManager volume.VolumeManager,
+	target *resolvedTarget,
+) (*docker.ContainerConfig, *terminal.SecurePassword, func(), error) {
 	// Check if Docker image exists, build if needed
 	if !embedded.ImageExists(docker.DefaultImageName) {
 		fmt.Fprintf(os.Stderr, "Docker image '%s' not found. Building...\n", docker.DefaultImageName)
 		if err := embedded.BuildImage(docker.DefaultImageName); err != nil {
-			return fmt.Errorf("failed to build Docker image: %w", err)
+			return nil, nil, nil, fmt.Errorf("failed to build Docker image: %w", err)
 		}
 		fmt.Fprintln(os.Stderr, "Docker image built successfully!")
 	}
@@ -396,28 +444,24 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// Verify Docker Desktop can access file mounts
 	fmt.Fprintln(os.Stderr, "Checking Docker file sharing configuration...")
 	if err := dockerManager.CheckTmpFileSharing(); err != nil {
-		return fmt.Errorf("Docker file sharing check failed: %w", err)
+		return nil, nil, nil, fmt.Errorf("Docker file sharing check failed: %w", err)
 	}
 
 	// Pre-start cleanup: remove any stale container from previous runs
 	fmt.Fprintln(os.Stderr, "Checking for stale containers...")
-	if err := dockerManager.RemoveContainer(containerName); err == nil {
+	if err := dockerManager.RemoveContainer(target.containerName); err == nil {
 		fmt.Fprintln(os.Stderr, "Removed stale container.")
 		time.Sleep(docker.MountReleaseDelay)
 	}
 
 	// Mount volume (reuses existing mount for fast re-entry)
-	mountPoint, password, err := ensureVolumeMounted(volumeManager, volumePath)
+	mountPoint, password, err := ensureVolumeMounted(volumeManager, target.volumePath)
 	if err != nil {
-		return err
-	}
-	if password != nil {
-		defer password.Clear()
+		return nil, nil, nil, err
 	}
 
 	// Setup shutdown handler to lock volume on crash/termination
-	cancelShutdown := setupShutdownHandler(createShutdownCleanup(volumePath, containerName))
-	defer cancelShutdown()
+	cancelShutdown := setupShutdownHandler(createShutdownCleanup(target.volumePath, target.containerName))
 
 	// Prepare Docker Desktop's VirtioFS cache for the mount point
 	prepareMountCache(dockerManager, mountPoint)
@@ -425,16 +469,35 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// Start container (with retry on VirtioFS cache conflicts)
 	containerConfig := &docker.ContainerConfig{
 		ImageName:        docker.DefaultImageName,
-		ContainerName:    containerName,
+		ContainerName:    target.containerName,
 		VolumeMountPoint: mountPoint,
-		WorkspacePath:    workspacePath,
+		WorkspacePath:    target.workspacePath,
 	}
-	if err := startContainerWithRetry(dockerManager, volumeManager, containerConfig, volumePath, password); err != nil {
-		return err
+	if err := startContainerWithRetry(dockerManager, volumeManager, containerConfig, target.volumePath, password); err != nil {
+		cancelShutdown()
+		if password != nil {
+			password.Clear()
+		}
+		return nil, nil, nil, err
 	}
 
-	// Enter container shell (sets up symlink, execs shell, cleans up on exit)
-	return enterContainerShell(dockerManager, volumeManager, containerConfig, repoID)
+	// Setup the shadow documentation symlink inside the container
+	fmt.Fprintln(os.Stderr, "Setting up shadow documentation...")
+	if err := dockerManager.SetupWorkspaceSymlink(containerConfig.ContainerName, target.repoID); err != nil {
+		if stopErr := dockerManager.Stop(containerConfig.ContainerName); stopErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: cleanup failed to stop container: %v\n", stopErr)
+		}
+		if unmountErr := volumeManager.Unmount(containerConfig.VolumeMountPoint); unmountErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: cleanup failed to unmount volume: %v\n", unmountErr)
+		}
+		cancelShutdown()
+		if password != nil {
+			password.Clear()
+		}
+		return nil, nil, nil, fmt.Errorf("failed to setup workspace symlink: %w", err)
+	}
+
+	return containerConfig, password, cancelShutdown, nil
 }
 
 // ensureVolumeMounted checks if the volume is already mounted and reuses it,
@@ -537,25 +600,12 @@ func startContainerWithRetry(
 	return nil
 }
 
-// enterContainerShell sets up the workspace symlink, execs into the container
-// shell, and handles cleanup after the user exits.
+// enterContainerShell execs into the container shell and handles cleanup after
+// the user exits. The workspace symlink is expected to already be set up.
 func enterContainerShell(
 	dm docker.DockerManager,
-	vm volume.VolumeManager,
 	config *docker.ContainerConfig,
-	repoID string,
 ) error {
-	fmt.Fprintln(os.Stderr, "Setting up shadow documentation...")
-	if err := dm.SetupWorkspaceSymlink(config.ContainerName, repoID); err != nil {
-		if stopErr := dm.Stop(config.ContainerName); stopErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: cleanup failed to stop container: %v\n", stopErr)
-		}
-		if unmountErr := vm.Unmount(config.VolumeMountPoint); unmountErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: cleanup failed to unmount volume: %v\n", unmountErr)
-		}
-		return fmt.Errorf("failed to setup workspace symlink: %w", err)
-	}
-
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Entering container... (type 'exit' to leave)")
 	fmt.Fprintln(os.Stderr, "")
@@ -586,6 +636,145 @@ func enterContainerShell(
 		return fmt.Errorf("shell exited with error: %w", execErr)
 	}
 
+	return nil
+}
+
+func newCodeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "code",
+		Short: "Open VS Code attached to the workspace container",
+		Long: `Ensures the encrypted volume is mounted and the workspace container is
+running, then launches host VS Code attached to the container at /workspace
+using the Dev Containers "Attach to Running Container" feature.
+
+Unlike 'capsule start', this command returns immediately and leaves the
+container running so you can edit in VS Code. Integrated terminals opened in
+VS Code run inside the container. When you're done, run 'capsule stop' to stop
+the container, or 'capsule lock' to also unmount and secure the volume.
+
+Requires the "Dev Containers" extension (ms-vscode-remote.remote-containers)
+in your host VS Code.`,
+		RunE: runCode,
+	}
+
+	cmd.Flags().String("volume", "", "Path to encrypted volume (auto-detected if not specified)")
+	cmd.Flags().String("workspace", "", "Workspace path (defaults to current directory or git root)")
+	cmd.Flags().String("editor", "code", "Editor CLI to launch (e.g. code, code-insiders, cursor, windsurf)")
+
+	return cmd
+}
+
+func runCode(cmd *cobra.Command, args []string) error {
+	volumePathFlag, err := cmd.Flags().GetString("volume")
+	if err != nil {
+		return fmt.Errorf("invalid volume flag: %w", err)
+	}
+	workspaceFlag, err := cmd.Flags().GetString("workspace")
+	if err != nil {
+		return fmt.Errorf("invalid workspace flag: %w", err)
+	}
+	editorFlag, err := cmd.Flags().GetString("editor")
+	if err != nil {
+		return fmt.Errorf("invalid editor flag: %w", err)
+	}
+
+	// Resolve the editor CLI up front so we fail before touching the container
+	// if VS Code isn't installed on the host.
+	editorBin, err := findEditorCLI(editorFlag)
+	if err != nil {
+		return err
+	}
+
+	// Resolve volume, workspace, repo ID, and container name
+	target, err := resolveTarget(volumePathFlag, workspaceFlag)
+	if err != nil {
+		return err
+	}
+
+	// Create managers
+	volumeManager, err := volume.New()
+	if err != nil {
+		return fmt.Errorf("failed to create volume manager: %w", err)
+	}
+	dockerManager := docker.NewManager()
+
+	// Bring up the container (build image, mount volume, start, setup symlink).
+	containerConfig, password, cancelShutdown, err := ensureContainerRunning(dockerManager, volumeManager, target)
+	if err != nil {
+		return err
+	}
+	if password != nil {
+		defer password.Clear()
+	}
+	// Unregister the shutdown handler: unlike 'start', we intentionally leave the
+	// container running and the volume mounted after this command returns.
+	defer cancelShutdown()
+
+	// Launch host VS Code attached to the running container.
+	fmt.Fprintln(os.Stderr, "Opening VS Code attached to the container...")
+	if err := launchVSCode(editorBin, containerConfig.ContainerName, "/workspace"); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintf(os.Stderr, "VS Code is attaching to container %q at /workspace.\n", containerConfig.ContainerName)
+	fmt.Fprintln(os.Stderr, "Integrated terminals will run inside the container.")
+	fmt.Fprintln(os.Stderr, "The container keeps running until you run 'capsule stop' or 'capsule lock'.")
+	return nil
+}
+
+// findEditorCLI locates the editor command-line launcher on the host. It checks
+// PATH first, then common macOS application bundle locations for VS Code.
+func findEditorCLI(editor string) (string, error) {
+	if path, err := exec.LookPath(editor); err == nil {
+		return path, nil
+	}
+
+	// Fall back to well-known macOS app bundle paths for common editors.
+	candidates := map[string][]string{
+		"code": {
+			"/usr/local/bin/code",
+			"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+		},
+		"code-insiders": {
+			"/usr/local/bin/code-insiders",
+			"/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code-insiders",
+		},
+		"cursor": {
+			"/usr/local/bin/cursor",
+			"/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+		},
+		"windsurf": {
+			"/usr/local/bin/windsurf",
+			"/Applications/Windsurf.app/Contents/Resources/app/bin/windsurf",
+		},
+	}
+
+	for _, candidate := range candidates[editor] {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not find the %q CLI on your PATH.\n"+
+		"Install it from VS Code via the command palette: \"Shell Command: Install 'code' command in PATH\",\n"+
+		"or pass a different launcher with --editor", editor)
+}
+
+// launchVSCode opens the editor attached to a running container at remotePath
+// using the Dev Containers attached-container URI scheme. The container name is
+// hex-encoded into the URI authority, e.g.
+// vscode-remote://attached-container+<hex>/workspace
+func launchVSCode(editorBin, containerName, remotePath string) error {
+	hexName := hex.EncodeToString([]byte(containerName))
+	folderURI := fmt.Sprintf("vscode-remote://attached-container+%s%s", hexName, remotePath)
+
+	cmd := exec.Command(editorBin, "--folder-uri", folderURI)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to launch editor (%s): %w", editorBin, err)
+	}
 	return nil
 }
 
