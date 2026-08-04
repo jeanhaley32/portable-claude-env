@@ -137,13 +137,24 @@ func newBootstrapCmd() *cobra.Command {
 	}
 
 	cmd.Flags().Int("size", 0, "Volume size in GB (prompts if not specified)")
-	cmd.Flags().String("api-key", "", "Claude API key (optional, can be added later)")
+	cmd.Flags().String("api-key", "", "Claude API key (optional, can be added later) - WARNING: visible in shell history and process list, prefer --api-key-stdin or CAPSULE_API_KEY")
+	cmd.Flags().Bool("api-key-stdin", false, "Read Claude API key from stdin instead of --api-key: echo $KEY | capsule bootstrap --api-key-stdin")
 	cmd.Flags().String("volume", "", "Explicit path for encrypted volume")
 	cmd.Flags().Bool("local", false, "Create volume in current directory")
 	cmd.Flags().Bool("global", false, "Create volume in ~/.capsule/volumes/ (default)")
 	cmd.Flags().StringSlice("context", []string{}, "Markdown files to extend Claude context (can be specified multiple times)")
 
 	return cmd
+}
+
+// resolveAPIKey returns flagValue if set, else falls back to CAPSULE_API_KEY.
+// Env vars aren't visible in shell history or `ps` the way a CLI flag is,
+// making this a safer default than requiring --api-key on the command line.
+func resolveAPIKey(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return os.Getenv("CAPSULE_API_KEY")
 }
 
 func runBootstrap(cmd *cobra.Command, args []string) error {
@@ -154,6 +165,24 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	apiKey, err := cmd.Flags().GetString("api-key")
 	if err != nil {
 		return fmt.Errorf("invalid api-key flag: %w", err)
+	}
+	apiKeyStdin, err := cmd.Flags().GetBool("api-key-stdin")
+	if err != nil {
+		return fmt.Errorf("invalid api-key-stdin flag: %w", err)
+	}
+	// --api-key puts the key in shell history and is visible to other
+	// processes via `ps` for the lifetime of this command - only used as a
+	// last resort. Prefer stdin (piped, never touches argv) or the env var
+	// (same visibility as any other secret env var, not process args).
+	if apiKeyStdin {
+		stdinKey, err := terminal.ReadPasswordFromStdinSecure()
+		if err != nil {
+			return fmt.Errorf("failed to read API key from stdin: %w", err)
+		}
+		apiKey = stdinKey.String()
+		stdinKey.Clear()
+	} else {
+		apiKey = resolveAPIKey(apiKey)
 	}
 	volumePathFlag, err := cmd.Flags().GetString("volume")
 	if err != nil {
