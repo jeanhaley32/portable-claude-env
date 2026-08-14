@@ -250,13 +250,12 @@ Update Claude Code: `claude-upgrade`
 |-------|------------|
 | Docker container | Process isolation from host |
 | Explicit mounts | Only `/workspace` and `/claude-env` visible |
-| Non-root user | Runs as unprivileged `claude` user |
 | No host networking | Isolated network namespace |
 | Encrypted volume | AES-256 encryption at rest |
 
 **Protected:** Host system, SSH keys, other projects, credentials at rest
 
-**Not protected:** Current project (mounted read-write by design), network traffic, runtime memory
+**Not protected:** Current project (mounted read-write by design), network traffic, runtime memory, in-container privilege escalation — the `claude` user has unrestricted, passwordless `sudo` inside the container (a deliberate convenience so you can install tools ad hoc without restarting), so anything that can run a shell command inside the container — including Claude Code itself, or a prompt-injected instruction it's tricked into running — can trivially become root *inside the container*. This does not affect the layers above (you're still isolated from the host, other projects, and credentials at rest); it means "unprivileged user" was never actually a meaningful privilege boundary *within* the container and has been removed from the table above rather than listed as a protection it doesn't provide.
 
 **Important:** After `exit`, the volume remains mounted for fast re-entry. Run `capsule lock` to fully secure credentials.
 
