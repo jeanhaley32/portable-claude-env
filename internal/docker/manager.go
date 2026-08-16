@@ -34,6 +34,23 @@ const (
 	DefaultContainerName = "claude-capsule"
 )
 
+// Default host-resource bounds applied to the container. These back the
+// README's "process isolation from host" claim: without them a runaway or
+// fork-bombing process inside the container (including anything Claude Code is
+// tricked into running) can exhaust the host's memory, PIDs, or CPU.
+//
+// Note: --cap-drop=ALL and no-new-privileges are deliberately NOT applied. The
+// container ships passwordless sudo as a documented convenience (see the
+// Security Model in README.md), so in-container privilege escalation is an
+// accepted non-boundary; dropping caps or blocking setuid would only break
+// that workflow without adding a boundary the design ever claimed. Host
+// resource bounds are the one hardening axis consistent with that model.
+const (
+	DefaultMemoryLimit = "8g"  // --memory: cap container RAM
+	DefaultPidsLimit   = "512" // --pids-limit: blunt fork-bomb protection
+	DefaultCPULimit    = ""    // --cpus: unset by default (don't throttle builds)
+)
+
 // Manager implements DockerManager using the Docker CLI.
 type Manager struct{}
 
@@ -83,17 +100,7 @@ func (m *Manager) Start(config ContainerConfig) error {
 	volumeMount := fmt.Sprintf("type=bind,source=%s,target=/claude-env,consistency=delegated", config.VolumeMountPoint)
 	workspaceMount := fmt.Sprintf("type=bind,source=%s,target=/workspace,consistency=delegated", config.WorkspacePath)
 
-	cmd := exec.CommandContext(ctx, "docker", "run",
-		"-d",
-		"--name", config.ContainerName,
-		"--mount", volumeMount,
-		"--mount", workspaceMount,
-		"-w", "/workspace",
-		"-e", "HOME=/claude-env/home",
-		"--entrypoint", "tail",
-		config.ImageName,
-		"-f", "/dev/null", // Keep container running
-	)
+	cmd := exec.CommandContext(ctx, "docker", buildRunArgs(config, volumeMount, workspaceMount)...)
 
 	// Capture stderr to include in error message for retry logic
 	output, err := cmd.CombinedOutput()
@@ -105,6 +112,48 @@ func (m *Manager) Start(config ContainerConfig) error {
 	}
 
 	return nil
+}
+
+// buildRunArgs assembles the `docker run` argument list for Start, applying the
+// host-resource bounds (falling back to the Default* constants when a limit is
+// unset). Kept pure so the flags can be unit-tested without invoking Docker.
+func buildRunArgs(config ContainerConfig, volumeMount, workspaceMount string) []string {
+	memoryLimit := config.MemoryLimit
+	if memoryLimit == "" {
+		memoryLimit = DefaultMemoryLimit
+	}
+	pidsLimit := config.PidsLimit
+	if pidsLimit == "" {
+		pidsLimit = DefaultPidsLimit
+	}
+	cpuLimit := config.CPULimit
+	if cpuLimit == "" {
+		cpuLimit = DefaultCPULimit
+	}
+
+	args := []string{
+		"run",
+		"-d",
+		"--name", config.ContainerName,
+		"--mount", volumeMount,
+		"--mount", workspaceMount,
+		"-w", "/workspace",
+		"-e", "HOME=/claude-env/home",
+	}
+	if memoryLimit != "" {
+		args = append(args, "--memory", memoryLimit)
+	}
+	if pidsLimit != "" {
+		args = append(args, "--pids-limit", pidsLimit)
+	}
+	if cpuLimit != "" {
+		args = append(args, "--cpus", cpuLimit)
+	}
+	return append(args,
+		"--entrypoint", "tail",
+		config.ImageName,
+		"-f", "/dev/null", // Keep container running
+	)
 }
 
 func (m *Manager) Stop(containerName string) error {

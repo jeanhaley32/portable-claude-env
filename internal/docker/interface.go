@@ -54,6 +54,12 @@ type ContainerConfig struct {
 	ContainerName    string
 	VolumeMountPoint string
 	WorkspacePath    string
+
+	// Host-resource bounds. Empty/zero values fall back to the Default*
+	// constants in manager.go when the container is started.
+	MemoryLimit string // docker --memory (e.g. "8g"); "" => DefaultMemoryLimit
+	PidsLimit   string // docker --pids-limit (e.g. "512"); "" => DefaultPidsLimit
+	CPULimit    string // docker --cpus (e.g. "2"); "" => DefaultCPULimit (unset)
 }
 
 // Validate checks that the container configuration is valid.
