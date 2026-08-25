@@ -251,6 +251,7 @@ Update Claude Code: `claude-upgrade`
 | Docker container | Process isolation from host |
 | Explicit mounts | Only `/workspace` and `/claude-env` visible |
 | No host networking | Isolated network namespace |
+| Resource bounds | `--memory`, `--pids-limit` cap host RAM/PID exhaustion (defaults 8g / 512; configurable) |
 | Encrypted volume | AES-256 encryption at rest |
 
 **Protected:** Host system, SSH keys, other projects, credentials at rest
